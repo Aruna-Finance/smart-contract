@@ -11,7 +11,9 @@ No admin role, no pause, no proxy: every contract is immutable once deployed.
 
 | Contract | Role |
 |---|---|
-| `ArunaFactory` | Permissionless factory: deploys one `CoverVault` + `VarianceAccumulator` per (pool, tenor). In v2 the creation code moves to separate deployers (`src/deployers/`) and the time parameters (tenor set, gap, sample interval) become factory constructor immutables. |
+| `ArunaFactory` | Permissionless factory with no canonical slot: any number of `CoverVault`s per (pool, tenor), one shared `VarianceAccumulator` per (factory, pool) with a baseline sample at creation. Validates tenor set, canonical Uniswap pool, settlement token and keeper bounds; time parameters (tenor set, gap, sample interval) are constructor immutables. |
+| `deployers/VaultDeployer` | Holds `CoverVault` creation code so the factory stays under EIP-170 (watch its size: it tracks the vault's initcode). |
+| `deployers/AccumulatorDeployer` | Holds `VarianceAccumulator` creation code. |
 | `CoverVault` | Underwriter capital, cohort calendar, cover sales, escrow of the LP position NFT, settlement. |
 | `VarianceAccumulator` | Samples the pool TWAP and accumulates squared log returns (§3.2). Never blocks a vault action. |
 | `FlatVegaPricer` | `IPremiumPricer` — premium from moneyness knots and utilization (§6.3). Deployed outside the factory. |

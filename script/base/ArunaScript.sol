@@ -57,11 +57,6 @@ abstract contract ArunaScript is Script {
         return uint16(v);
     }
 
-    function _u24(uint256 v) internal pure returns (uint24) {
-        require(v <= type(uint24).max, "u24 overflow");
-        return uint24(v);
-    }
-
     function _u32(uint256 v) internal pure returns (uint32) {
         require(v <= type(uint32).max, "u32 overflow");
         return uint32(v);
