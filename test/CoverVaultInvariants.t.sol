@@ -15,7 +15,8 @@ import {MockValuer} from "./mocks/MockValuer.sol";
 /// @title CoverVaultHandler
 /// @notice Bounded actor that drives ONE CoverVault through its whole cohort lifecycle
 ///         under fuzzed calls: deposit (FUNDING) → buyCover (ACTIVE) → finalize →
-///         settleBatch (SETTLING) → withdraw / rollTo (FUNDING/SETTLED), plus poke/warp to
+///         settleBatch / settlePolicy (SETTLING) → withdraw / rollTo (FUNDING/SETTLED),
+///         plus cancel (ACTIVE, U5 escrow) and poke/warp to
 ///         march the oracle and the gap calendar, and direct token donations (residual). Every action guards its own preconditions and
 ///         returns quietly when they do not hold, so `fail_on_revert = false` discards
 ///         nothing meaningful. Money that enters and leaves is mirrored on ghost totals
@@ -80,6 +81,8 @@ contract CoverVaultHandler is Test {
             _actors.push(actors_[i]);
             vm.prank(actors_[i]);
             token.approve(address(vault), type(uint256).max);
+            vm.prank(actors_[i]);
+            pm.setApprovalForAll(address(vault), true); // buyCover escrows the NFT
         }
     }
 
@@ -104,6 +107,7 @@ contract CoverVaultHandler is Test {
     function warp(uint256 dtSeed) external {
         uint256 dt = bound(dtSeed, 1 hours, uint256(tenor) / 2 + 1);
         vm.warp(vm.getBlockTimestamp() + dt);
+        acc.tryPoke(); // a live keeper: one quiet sample per step (throttle permitting)
     }
 
     /// @notice Append a monotonic oracle sample at `now` (delta >= 0). This is the only
@@ -136,20 +140,29 @@ contract CoverVaultHandler is Test {
         uint256 strikeSeed
     ) external {
         address a = _actor(actorSeed);
-        uint32 cid = uint32(bound(cidSeed, 0, 5));
+        // Only the current cohort can be ACTIVE: aim there (any other id is a no-op), so
+        // the fuzzer actually reaches buy → cancel / settle sequences.
+        uint32 cid = vault.currentCohortId();
+        if (cidSeed % 8 == 0) cid = uint32(bound(cidSeed, 0, 5)); // occasionally off-target
         if (vault.statusOf(cid) != ICoverVault.Status.ACTIVE) return;
 
         ICoverVault.Cohort memory c = vault.cohort(cid);
-        if (vm.getBlockTimestamp() >= c.endsAt) return;
+        // v2 buy rules (U5): ≥ 5 sample intervals left, capital, live-policy cap.
+        if (vm.getBlockTimestamp() + 5 * uint256(vault.sampleInterval()) > c.endsAt) return;
         if (c.totalCapital == 0 || acc.sampleCount() == 0) return;
+        if (c.policyCount >= vault.policyCap()) return;
 
         // Room under the utilization cap. maxExcessVariance == WAD in this suite, so
-        // maxPayout == varNotional; picking varNotional <= room guarantees capacity.
+        // maxPayout == varNotional; picking varNotional in [minimum, room] guarantees
+        // both the per-policy minimum (capacity / policyCap) and capacity.
         uint256 available = uint256(c.totalCapital).mulDivDown(maxUtilBps, BPS);
         if (available <= c.reserved) return;
         uint256 room = available - c.reserved;
+        uint256 minPayout = available / vault.policyCap();
+        if (minPayout == 0) minPayout = 1;
+        if (room < minPayout) return;
 
-        uint128 vn = uint128(bound(vnSeed, 1, room));
+        uint128 vn = uint128(bound(vnSeed, minPayout, room));
         valuer.setVarNotional(vn);
 
         uint128 premium = uint128(bound(premSeed, 0, 1e9));
@@ -159,6 +172,7 @@ contract CoverVaultHandler is Test {
         uint64 strike = uint64(bound(strikeSeed, 0, uint64(WAD / 2)));
         uint256 tokenId = ++_tokenCounter; // >= 1 always (I8)
         pm.setOwner(tokenId, a);
+        pm.setPosition(tokenId, -600, 600, 1e18);
 
         vm.prank(a);
         try vault.buyCover(
@@ -170,6 +184,35 @@ contract CoverVaultHandler is Test {
             ghostSumMaxPayout[cid] += vault.policy(pid).maxPayout;
             _touch(cid);
         } catch {}
+    }
+
+    /// @notice Cancel a live policy before endsAt (R16): no settlement token moves; the
+    ///         NFT goes back and reserved is released.
+    function cancel(uint256 policySeed) external {
+        uint256 n = vault.policyCount();
+        if (n == 0) return;
+        uint256 pid = bound(policySeed, 0, n - 1);
+        ICoverVault.Policy memory p = vault.policy(pid);
+        if (p.status != ICoverVault.PolicyStatus.Active) return;
+        if (vm.getBlockTimestamp() >= vault.endsAt(p.cohortId)) return;
+        uint256[] memory before = _snapshot();
+        vm.prank(p.owner);
+        try vault.cancel(pid) {} catch {}
+        _checkNoDebit(before);
+    }
+
+    /// @notice Permissionless per-policy settle, out of order w.r.t. settleBatch.
+    function settlePolicy(uint256 policySeed) external {
+        uint256 n = vault.policyCount();
+        if (n == 0) return;
+        uint256 pid = bound(policySeed, 0, n - 1);
+        ICoverVault.Policy memory p = vault.policy(pid);
+        if (p.status != ICoverVault.PolicyStatus.Active) return;
+        if (vault.statusOf(p.cohortId) != ICoverVault.Status.SETTLING) return;
+        uint256[] memory before = _snapshot();
+        try vault.settlePolicy(pid) {} catch {}
+        ghostOut += _received(before);
+        _checkNoDebit(before);
     }
 
     function finalize(uint256 cidSeed) external {
@@ -188,12 +231,10 @@ contract CoverVaultHandler is Test {
         if (vault.cohort(cid).status != ICoverVault.Status.SETTLING) return;
 
         uint32 n = uint32(bound(nSeed, 1, 8));
-        uint128 paidBefore = vault.cohort(cid).claimsPaid;
         uint256[] memory before = _snapshot();
-        try vault.settleBatch(cid, n) {
-            uint128 paidAfter = vault.cohort(cid).claimsPaid;
-            ghostOut += (paidAfter - paidBefore); // tokens pushed to LP owners
-        } catch {}
+        try vault.settleBatch(cid, n) {} catch {}
+        // Payouts AND refunds pushed to LP owners, measured on the recipients' side.
+        ghostOut += _received(before);
         _checkNoDebit(before);
     }
 
@@ -260,6 +301,14 @@ contract CoverVaultHandler is Test {
         }
     }
 
+    /// @dev Tokens the actors gained since `before` (settle pushes only ever credit them).
+    function _received(uint256[] memory before) internal view returns (uint256 sum) {
+        for (uint256 i = 0; i < _actors.length; i++) {
+            uint256 b = token.balanceOf(_actors[i]);
+            if (b > before[i]) sum += b - before[i];
+        }
+    }
+
     /// @dev I4: no settlement/withdraw path may ever take tokens FROM an LP. Recorded on
     ///      a ghost flag rather than asserted here, because a bare assert inside a
     ///      handler call would be swallowed by fail_on_revert = false.
@@ -290,6 +339,7 @@ contract CoverVaultInvariants is Test {
     uint16 internal constant EWMA_ALPHA_BPS = 2_000;
     uint128 internal constant SEED_VARIANCE = uint128(WAD / 10);
     uint128 internal constant SEED_CUMSQ = 0;
+    uint32 internal constant POLICY_CAP = 8; // small, so the fuzzer reaches the cap (min 1_000 on 10k)
 
     CoverVault internal vault;
     MockERC20 internal token;
@@ -334,7 +384,8 @@ contract CoverVaultInvariants is Test {
             MAX_UTIL_BPS,
             MAX_EXCESS_VARIANCE,
             EWMA_ALPHA_BPS,
-            SEED_VARIANCE
+            SEED_VARIANCE,
+            POLICY_CAP
         );
 
         address[] memory actors = new address[](3);
@@ -496,6 +547,24 @@ contract CoverVaultInvariants is Test {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Escrow (plan "Polis dan escrow", U5) — the vault holds a policy's NFT exactly while
+    // the policy is Active (or its return parked); every other policy's NFT is back with
+    // its owner. Each handler buy mints a fresh tokenId, so this is unambiguous.
+    // ------------------------------------------------------------------
+    function invariant_Escrow_NftCustody() public view {
+        uint256 n = vault.policyCount();
+        for (uint256 i = 0; i < n; i++) {
+            ICoverVault.Policy memory p = vault.policy(i);
+            address holder = pm.ownerOf(p.positionTokenId);
+            if (p.status == ICoverVault.PolicyStatus.Active || p.nftParked) {
+                assertEq(holder, address(vault), "escrow: live policy NFT not in vault");
+            } else {
+                assertEq(holder, p.owner, "escrow: final policy NFT not returned");
+            }
+        }
+    }
+
     // ==================================================================
     // Directed lifecycle tests — proof the fuzzed suite is not vacuous.
     // They walk the whole path deterministically (deposit -> buyCover ->
@@ -524,17 +593,13 @@ contract CoverVaultInvariants is Test {
 
         // Move to ACTIVE and sell cover: varNotional 1000 -> maxPayout 1000, strike 0.
         vm.warp(startsAt);
-        valuer.setVarNotional(1_000);
-        pricer.setPremium(100);
-        pm.setOwner(1, BUYER);
-        token.mint(BUYER, 100);
-        vm.prank(BUYER);
-        token.approve(address(vault), type(uint256).max);
-        vm.prank(BUYER);
-        vault.buyCover(cid, 1, uint64(0), 100, uint64(startsAt + 1));
+        _buyAsBuyer(cid, startsAt);
         assertEq(uint256(vault.cohort(cid).reserved), 1_000, "reserved == maxPayout at buy");
 
-        // Accumulate realized variance to 5e17 at a timestamp <= endsAt.
+        // The buy's poke sampled at startsAt (j); +1800 is the baseline s. Realized
+        // variance after s reaches 5e17 at a timestamp <= endsAt, over 2 returns.
+        acc.push(uint32(startsAt + 1_800), 0);
+        acc.push(uint32(startsAt + 3_600), uint128(25e16));
         vm.warp(2_000_000);
         acc.push(uint32(2_000_000), uint128(5e17));
 
@@ -582,16 +647,13 @@ contract CoverVaultInvariants is Test {
         vault.deposit(cid, capital);
 
         vm.warp(startsAt);
-        valuer.setVarNotional(1_000);
-        pricer.setPremium(100);
-        pm.setOwner(1, BUYER);
-        token.mint(BUYER, 100);
-        vm.prank(BUYER);
-        token.approve(address(vault), type(uint256).max);
-        vm.prank(BUYER);
-        vault.buyCover(cid, 1, uint64(0), 100, uint64(startsAt + 1));
+        _buyAsBuyer(cid, startsAt);
 
-        // No new oracle samples -> sumSqCovered stays 0 -> payout 0.
+        // On-time samples but no variance -> sumSqCovered stays 0 -> measured, payout 0
+        // (not a refund: 2 returns follow the baseline).
+        acc.push(uint32(startsAt + 1_800), 0);
+        acc.push(uint32(startsAt + 3_600), 0);
+        acc.push(uint32(startsAt + 5_400), 0);
         vm.warp(endsAt);
         vault.finalize(cid);
         vault.settleBatch(cid, 1);
@@ -604,5 +666,19 @@ contract CoverVaultInvariants is Test {
         uint256 net = vault.withdraw(cid);
         assertEq(net, 10_100, "underwriter keeps capital + full premium");
         assertEq(token.balanceOf(address(vault)), 0, "vault emptied exactly");
+    }
+
+    function _buyAsBuyer(uint32 cid, uint64 startsAt) internal {
+        valuer.setVarNotional(1_000);
+        pricer.setPremium(100);
+        pm.setOwner(1, BUYER);
+        pm.setPosition(1, -600, 600, 1e18);
+        token.mint(BUYER, 100);
+        vm.prank(BUYER);
+        token.approve(address(vault), type(uint256).max);
+        vm.prank(BUYER);
+        pm.setApprovalForAll(address(vault), true);
+        vm.prank(BUYER);
+        vault.buyCover(cid, 1, uint64(0), 100, uint64(startsAt + 1));
     }
 }

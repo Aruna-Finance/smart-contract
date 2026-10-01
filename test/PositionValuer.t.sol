@@ -46,9 +46,11 @@ contract PositionValuerTest is Test {
         );
     }
 
-    function test_ZeroLiquidity_ReturnsZero() public {
+    /// @notice No liquidity, no gamma: refused outright instead of a zero notional (U5).
+    function test_ZeroLiquidity_Reverts() public {
         _set(-1_000, 1_000, 0);
-        assertEq(valuer.varNotionalFor(TOKEN_ID), 0, "no liquidity, no exposure");
+        vm.expectRevert(abi.encodeWithSelector(PositionValuer.ZeroLiquidity.selector, TOKEN_ID));
+        valuer.varNotionalFor(TOKEN_ID);
     }
 
     function test_NarrowerRange_HigherNotional() public {

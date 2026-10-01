@@ -21,16 +21,11 @@ interface IERC721ReceiverMock {
 ///           amounts (capped by amount{0,1}Max) in two configured MockERC20 fee tokens
 ///           and zeroes what it paid.
 ///         - `increaseLiquidity`: open to anyone (as on NFPM, which lets anyone add).
+///         - `decreaseLiquidity`: owner/approved/operator only (as on NFPM).
 ///         - `setTransferFails`: makes every transfer revert, to prove the vault's
 ///           NFT-parking defense (plan "Pengembalian NFT"), unreachable on real NFPM.
 contract MockPositionManager is INonfungiblePositionManager {
-    /// @dev Mirrors INonfungiblePositionManager.CollectParams in Uniswap v3 periphery.
-    struct CollectParams {
-        uint256 tokenId;
-        address recipient;
-        uint128 amount0Max;
-        uint128 amount1Max;
-    }
+    // CollectParams comes from INonfungiblePositionManager (mirrors Uniswap v3 periphery).
 
     struct Pos {
         int24 tickLower;
@@ -207,6 +202,7 @@ contract MockPositionManager is INonfungiblePositionManager {
     /// @notice NFPM `collect`: pays owed fees (capped by the max amounts) to `recipient`.
     function collect(CollectParams calldata params)
         external
+        payable
         returns (uint256 amount0, uint256 amount1)
     {
         if (params.amount0Max == 0 && params.amount1Max == 0) revert NothingToCollect();
@@ -222,6 +218,15 @@ contract MockPositionManager is INonfungiblePositionManager {
         if (c1 != 0) _pay(feeToken1, params.recipient, c1);
         emit Collect(params.tokenId, params.recipient, c0, c1);
         return (c0, c1);
+    }
+
+    /// @notice NFPM `decreaseLiquidity` shape (owner/approved/operator only, as on NFPM):
+    ///         lowers liquidity and books the withdrawn amount as owed (1:1 into owed0).
+    ///         Lets tests prove an escrowed position cannot be drained by its LP (AE7).
+    function decreaseLiquidity(uint256 tokenId, uint128 liquidityDelta) external {
+        if (!_isApprovedOrOwner(msg.sender, tokenId)) revert NotAuthorized(msg.sender, tokenId);
+        posOf[tokenId].liquidity -= liquidityDelta;
+        posOf[tokenId].tokensOwed0 += liquidityDelta;
     }
 
     /// @notice Open to anyone, like NFPM: bumps liquidity (no tokens pulled).

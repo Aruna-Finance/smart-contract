@@ -48,7 +48,8 @@ contract ArunaFactoryTest is Test {
             maxExcessVariance: uint128(WAD),
             ewmaAlphaBps: 2_000,
             seedVariance: uint128(WAD / 10),
-            sampleInterval: 1_800
+            sampleInterval: 1_800,
+            policyCap: 100
         });
     }
 

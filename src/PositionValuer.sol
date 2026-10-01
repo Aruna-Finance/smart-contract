@@ -40,6 +40,7 @@ contract PositionValuer is IPositionValuer {
     error BadConfig();
     error InvalidRange(int24 tickLower, int24 tickUpper);
     error NotionalOverflow(uint256 varNotional);
+    error ZeroLiquidity(uint256 tokenId);
 
     /// @notice Uniswap v3 position manager the tokenId is read from.
     INonfungiblePositionManager public immutable positionManager;
@@ -85,8 +86,9 @@ contract PositionValuer is IPositionValuer {
         (,,,,, int24 tickLower, int24 tickUpper, uint128 liquidity,,,,) =
             positionManager.positions(positionTokenId);
 
-        // A position with no liquidity has no gamma to hedge.
-        if (liquidity == 0) return 0;
+        // A position with no liquidity has no gamma to hedge: refuse it outright rather
+        // than return a zero notional a caller might price (plan U5).
+        if (liquidity == 0) revert ZeroLiquidity(positionTokenId);
         if (tickUpper <= tickLower) revert InvalidRange(tickLower, tickUpper);
 
         // Width strictly positive after the guard above; widen to int256 before the

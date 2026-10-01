@@ -27,6 +27,7 @@ contract CoverVaultTest is Test {
     uint128 internal constant MAX_EXCESS = uint128(WAD); // maxPayout = varNotional * 1
     uint16 internal constant ALPHA_BPS = 2_000;
     uint128 internal constant SEED_VAR = uint128(WAD / 10);
+    uint32 internal constant POLICY_CAP = 100; // min maxPayout = 8_000e6 / 100 = 80e6
 
     // cohort 1 window: startsAt(1) = anchor + (tenor + gap), endsAt(1) = startsAt(1) + tenor
     uint64 internal constant C1_START = ANCHOR + TENOR + GAP; // 2_691_200
@@ -52,6 +53,7 @@ contract CoverVaultTest is Test {
         pm = new MockPositionManager();
         pm.setPool(address(0), address(0), 3000); // match the pool
         pm.setOwner(TOKEN_ID, lp);
+        pm.setPosition(TOKEN_ID, -600, 600, 1e18); // live liquidity (zero is refused)
         pricer = new MockPricer();
         valuer = new MockValuer();
         acc = new MockAccumulator();
@@ -70,7 +72,8 @@ contract CoverVaultTest is Test {
             UTIL_BPS,
             MAX_EXCESS,
             ALPHA_BPS,
-            SEED_VAR
+            SEED_VAR,
+            POLICY_CAP
         );
 
         // Fund actors and approve the vault.
@@ -83,6 +86,8 @@ contract CoverVaultTest is Test {
         token.approve(address(vault), type(uint256).max);
         vm.prank(lp);
         token.approve(address(vault), type(uint256).max);
+        vm.prank(lp);
+        pm.setApprovalForAll(address(vault), true); // buyCover escrows the NFT
     }
 
     function test_HappyPath_ConservesFunds() public {
@@ -114,14 +119,20 @@ contract CoverVaultTest is Test {
         ICoverVault.Policy memory p = vault.policy(policyId);
         assertEq(p.owner, lp, "policy owner");
         assertEq(p.maxPayout, 2_000e6, "maxPayout derived");
-        assertEq(p.startSumSq, 0, "startSumSq");
+        assertEq(p.purchasedAt, C1_START + 1, "purchase time recorded");
+        assertEq(pm.ownerOf(TOKEN_ID), address(vault), "NFT escrowed");
 
         c = vault.cohort(COHORT);
         assertEq(c.reserved, 2_000e6, "reserved");
         assertEq(c.premiumsCollected, 200e6, "premiums");
         assertEq(c.policyCount, 1, "policyCount");
 
-        // Realized variance over the window: 0.5e18 (strike 0 => full excess).
+        // Samples after the purchase: +1800 is the first at/after it (j), +3600 the
+        // baseline s; realized variance after s reaches 0.5e18 by C1_END (strike 0 =>
+        // full excess), over 2 returns.
+        acc.push(uint32(C1_START + 1_800), 0);
+        acc.push(uint32(C1_START + 3_600), 0);
+        acc.push(uint32(C1_START + 5_400), uint128(WAD / 4));
         acc.push(uint32(C1_END), uint128(WAD / 2));
 
         // --- SETTLING: finalize then settle ---
@@ -139,6 +150,11 @@ contract CoverVaultTest is Test {
         c = vault.cohort(COHORT);
         assertEq(c.reserved, 0, "reserved released");
         assertEq(c.claimsPaid, 1_000e6, "claimsPaid");
+        p = vault.policy(policyId);
+        assertEq(uint8(p.status), uint8(ICoverVault.PolicyStatus.Settled), "measured");
+        assertEq(p.startIndex, 2, "baseline resolved at settle");
+        assertEq(p.startSumSq, 0, "baseline sum");
+        assertEq(pm.ownerOf(TOKEN_ID), lp, "NFT returned");
 
         // --- SETTLED: underwriters withdraw net ---
         // uw1: 6000 + 200*0.6 - ceil(1000*0.6) = 6000 + 120 - 600 = 5520

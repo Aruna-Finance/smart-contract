@@ -33,6 +33,20 @@ import {Math} from "./libraries/Math.sol";
 ///         finalize never reverts for lack of samples (SC-03), and underwriter capital can
 ///         roll into cohort n+1 during n's gap (SC-04). The vault tracks every obligation
 ///         it owes, so `residual = balance − obligations` is explicit and testable (R5, I3).
+///
+///         v2 policies (plan "Polis dan escrow", U5): cover is bought by escrowing the
+///         position NFT — the buyer approves the vault and `buyCover` pulls it with
+///         `transferFrom`, pays the fees owed to the owner, and snapshots `varNotional`.
+///         While escrowed, nobody can pull liquidity (the vault has no path to
+///         `decreaseLiquidity`; R14/R15), only the policy owner can collect fees, and one
+///         position can carry only one live policy at a time — naturally, since the
+///         vault holds the NFT (R18). The NFT goes back with `transferFrom` on cancel or
+///         settle; if that ever fails it is parked for `claimPosition` (R17).
+///
+///         Escrow limit: `safeTransferFrom` into the vault outside a purchase is
+///         rejected by `onERC721Received`, but a plain `transferFrom` straight to the
+///         vault cannot be detected (no hook runs). Such an NFT is attached to no
+///         policy and is UNRECOVERABLE — there is no admin and no rescue path.
 contract CoverVault is ICoverVault {
     using Math for uint256;
 
@@ -44,6 +58,16 @@ contract CoverVault is ICoverVault {
     ///      than this reverts only its own transfer; the batch continues and the
     ///      payout lands in `unclaimed` (design §7.3).
     uint256 internal constant PUSH_GAS = 100_000;
+
+    /// @dev Gas cap for the NFT return. NFPM `transferFrom` runs no receiver hook, so the
+    ///      recipient cannot burn gas; the cap only bounds a misbehaving manager. A failed
+    ///      return parks the NFT (plan "Pengembalian NFT", R17).
+    uint256 internal constant NFT_RETURN_GAS = 150_000;
+
+    /// @notice A policy must leave at least this many sample intervals before endsAt
+    ///         (plan "Pengukuran"): worst case one throttled poke at purchase (+1), the
+    ///         baseline (+2), two returns (+4), plus one interval of poke lateness.
+    uint256 public constant MIN_INTERVALS_LEFT = 5;
 
     /// @notice A cohort window is flagged `degraded` (AE6, informational only) when two
     ///         consecutive samples in it — or a window edge and its nearest sample — are
@@ -77,6 +101,10 @@ contract CoverVault is ICoverVault {
     uint16 public immutable maxUtilizationBps; // I1 lever; 8000 recommended, not 10000
     uint128 public immutable maxExcessVariance; // caps maxPayout = varNotional * this / WAD
     uint16 public immutable ewmaAlphaBps; // EWMA weight on the newest cohort
+    /// @notice Max LIVE policies per cohort (R24, SC-16). With the per-policy minimum
+    ///         maxPayout = capacity / policyCap, filling every slot costs the whole
+    ///         capacity, so a cohort cannot be locked with dust policies.
+    uint32 public immutable policyCap;
 
     /// @dev Max samples between the window's bracketing indices when NOT degraded:
     ///      tenor/interval + DEGRADED_GAP_MULTIPLE + 1 (see _scanDegraded).
@@ -124,6 +152,16 @@ contract CoverVault is ICoverVault {
     error MaxPayoutOverflow(uint256 value);
     error NothingToWithdraw();
     error TransferFailed();
+    error ZeroLiquidity(uint256 tokenId);
+    error TooLateToBuy(uint64 endsAt);
+    error BelowMinPayout(uint96 maxPayout, uint128 minPayout);
+    error PolicyCapReached(uint32 policyCap);
+    error NotPolicyOwner(uint256 policyId);
+    error PolicyNotActive(uint256 policyId);
+    error PositionNotHeld(uint256 policyId);
+    error NotParked(uint256 policyId);
+    error ZeroRecipient();
+    error UnsolicitedPosition(uint256 tokenId);
 
     /// @dev The variance window a finalize locks: the samples bracketing
     ///      [startsAt, endsAt] that actually exist (SC-03).
@@ -147,6 +185,7 @@ contract CoverVault is ICoverVault {
 
     /// @param gap_ Settlement gap in seconds (R8): forwarded by the factory, > 0 so a
     ///        settled cohort can roll into the next one before it starts.
+    /// @param policyCap_ Max live policies per cohort (> 0); see `policyCap`.
     /// @dev `sampleInterval` is read from the accumulator, which must already be
     ///      configured; the scan bound is validated against it here.
     constructor(
@@ -162,14 +201,15 @@ contract CoverVault is ICoverVault {
         uint16 maxUtilizationBps_,
         uint128 maxExcessVariance_,
         uint16 ewmaAlphaBps_,
-        uint128 seedVariance_
+        uint128 seedVariance_,
+        uint32 policyCap_
     ) {
         if (
             pool_ == address(0) || accumulator_ == address(0) || pricer_ == address(0)
                 || valuer_ == address(0) || positionManager_ == address(0)
                 || settlementToken_ == address(0) || tenor_ == 0 || gap_ == 0
                 || maxUtilizationBps_ == 0 || maxUtilizationBps_ > BPS || maxExcessVariance_ == 0
-                || ewmaAlphaBps_ > BPS
+                || ewmaAlphaBps_ > BPS || policyCap_ == 0
         ) revert BadConfig();
 
         uint32 interval = IVarianceAccumulator(accumulator_).sampleInterval();
@@ -197,6 +237,7 @@ contract CoverVault is ICoverVault {
         maxExcessVariance = maxExcessVariance_;
         ewmaAlphaBps = ewmaAlphaBps_;
         ewmaVariance = seedVariance_;
+        policyCap = policyCap_;
     }
 
     // ---------------------------------------------------------------------
@@ -311,10 +352,13 @@ contract CoverVault is ICoverVault {
     }
 
     /// @inheritdoc ICoverVault
-    /// @dev TODO(U5): poke-on-touch (tryPoke), ≥5-interval remaining-time gate, min maxPayout
-    ///      and live-policy cap, NFT escrow (transferFrom into the vault, collect
-    ///      tokensOwed, snapshot varNotional), purchase timestamp instead of the
-    ///      startIndex/startSumSq recorded below (baseline resolved at settle).
+    /// @dev Order (plan U5): first-touch snapshot (lazily finalizing cohort n−1), a poke
+    ///      that never fails the action (R3), ownership + pool + liquidity, the ≥5-interval
+    ///      gate, minimum maxPayout, live-policy cap, capacity, price from the snapshot;
+    ///      then effects, then interactions: pull premium, pull the NFT into escrow
+    ///      (`transferFrom`; the buyer must have approved the vault), collect the fees
+    ///      owed to the buyer. The window baseline is NOT fixed here: the policy records
+    ///      its purchase time and settle resolves the first sample after it (SC-02).
     function buyCover(
         uint32 cohortId,
         uint256 positionTokenId,
@@ -328,50 +372,57 @@ contract CoverVault is ICoverVault {
         if (_status(cohortId, c) != Status.ACTIVE) revert NotActive(cohortId);
         // SC-16: a cohort without capital sells nothing (and is SETTLED at endsAt).
         if (c.totalCapital == 0) revert ZeroCapital(cohortId);
+        // Too close to endsAt for two post-baseline returns even with a throttled poke:
+        // refusing here closes the free-refund option (plan "Pengukuran").
+        uint256 end = _endsAt(cohortId);
+        if (end - block.timestamp < MIN_INTERVALS_LEFT * sampleInterval) {
+            revert TooLateToBuy(uint64(end));
+        }
 
-        // Position-attached: prove ownership NOW and that the position is this pool's.
-        // A speculator with no position cannot buy; an LP cannot cover someone else's
-        // position (design §8.2, invariant I8). Ownership is a precondition at buy,
-        // not a standing invariant — the NFT may be sold afterward.
+        // First touch after startsAt: finalize the previous cohort if pending, then fix
+        // this cohort's σ̂². Every later policy of the cohort prices with it (R10).
+        uint128 sigma2 = _touchSnapshot(cohortId, c);
+        accumulator.tryPoke(); // never reverts; a throttled poke just adds nothing
+        if (accumulator.sampleCount() == 0) revert NoSamples();
+
+        // Position-attached: the caller owns the position NOW and it is this pool's, with
+        // liquidity (design §8.2, I8). The NFT then sits in the vault until the policy
+        // ends, so the same position cannot back a second live policy (R18).
         if (positionManager.ownerOf(positionTokenId) != msg.sender) {
             revert PositionNotOwned(positionTokenId);
         }
         _requirePositionMatchesPool(positionTokenId);
 
-        // First touch after startsAt: finalize the previous cohort if pending, then fix
-        // this cohort's σ̂². Every later policy of the cohort prices with it (R10).
-        uint128 sigma2 = _touchSnapshot(cohortId, c);
-
-        uint32 sampleCount = accumulator.sampleCount();
-        if (sampleCount == 0) revert NoSamples();
-
         // varNotional falls out of the position's gamma exposure — never a caller input.
+        // Snapshotted here: a later third-party increaseLiquidity cannot move the payout.
         uint128 varNotional = valuer.varNotionalFor(positionTokenId);
         uint96 maxPayout = _deriveMaxPayout(varNotional);
-        uint32 coveredSeconds = _coveredSeconds(cohortId);
 
         // Capacity: reserved + maxPayout ≤ totalCapital * util / 10_000 (invariant I1).
         // Premiums never add capacity (§5.2): selling cover with the buyer's own money
         // is exactly what this line forbids.
         uint128 available = uint128(uint256(c.totalCapital).mulDivDown(maxUtilizationBps, BPS));
+        // R24 / SC-16: every live slot must carry at least capacity / policyCap, so
+        // filling the cap costs the whole capacity (no dust lock-out). Rounded DOWN so
+        // policyCap minimum policies always fit.
+        uint128 minPayout = available / policyCap;
+        if (maxPayout == 0 || maxPayout < minPayout) revert BelowMinPayout(maxPayout, minPayout);
+        if (c.policyCount >= policyCap) revert PolicyCapReached(policyCap);
         uint128 wouldReserve = c.reserved + maxPayout;
         if (wouldReserve > available) revert CapacityExceeded(wouldReserve, available);
 
+        uint32 coveredSeconds = _coveredSeconds(cohortId);
         uint128 premium = pricer.quote(
             varNotional, strikeAnnualized, coveredSeconds, sigma2, c.reserved, c.totalCapital
         );
         if (premium > maxPremium) revert PremiumTooHigh(premium, maxPremium);
 
-        // Per-policy window (§6.2): record the cumulative sum-of-squares at purchase;
-        // settlement subtracts it once.
-        uint32 startIndex = sampleCount - 1;
-        uint128 startSumSq = accumulator.sampleAt(startIndex).cumulativeSumSq;
-
         // Effects before interaction (CEI): reserve, record premium, store policy.
         // TODO(U6): the keeper skim is taken after endsAt (at settle / finalize), never here.
+        uint32 queueIndex = c.policyCount;
         c.reserved = wouldReserve;
         c.premiumsCollected += premium;
-        c.policyCount += 1;
+        c.policyCount = queueIndex + 1;
         _obligations += premium;
 
         policyId = _policies.length;
@@ -380,19 +431,107 @@ contract CoverVault is ICoverVault {
                 owner: msg.sender,
                 maxPayout: maxPayout,
                 varNotional: varNotional,
-                startSumSq: startSumSq,
+                startSumSq: 0, // resolved at settle
                 strikeAnnualized: strikeAnnualized,
                 coveredSeconds: coveredSeconds,
-                startIndex: startIndex,
+                startIndex: 0, // resolved at settle
                 cohortId: cohortId,
-                settled: false,
+                purchasedAt: uint32(block.timestamp),
+                queueIndex: queueIndex,
+                status: PolicyStatus.Active,
+                nftParked: false,
+                premium: premium,
                 positionTokenId: positionTokenId
             })
         );
         _cohortPolicies[cohortId].push(policyId);
 
         _pull(msg.sender, premium);
+        positionManager.transferFrom(msg.sender, address(this), positionTokenId);
+        _collect(positionTokenId, msg.sender); // fees accrued before cover stay the LP's
         emit CoverBought(policyId, cohortId, msg.sender, positionTokenId, premium, maxPayout);
+        emit PositionEscrowed(policyId, positionTokenId, msg.sender);
+    }
+
+    // ---------------------------------------------------------------------
+    // Policy owner — fees, cancel, parked NFT
+    // ---------------------------------------------------------------------
+
+    /// @inheritdoc ICoverVault
+    /// @dev The only NFPM call a policy owner can trigger (R14, R15): fees to a recipient
+    ///      of their choice, while the vault holds the NFT. No liquidity path exists.
+    function collectFees(uint256 policyId, address recipient)
+        external
+        nonReentrant
+        returns (uint256 amount0, uint256 amount1)
+    {
+        Policy storage p = _policies[policyId];
+        if (msg.sender != p.owner) revert NotPolicyOwner(policyId);
+        // The vault holds this policy's NFT only while Active or parked; afterwards the
+        // same tokenId may be escrowed again under a different policy.
+        if (p.status != PolicyStatus.Active && !p.nftParked) revert PositionNotHeld(policyId);
+        if (recipient == address(0)) revert ZeroRecipient();
+        (amount0, amount1) = _collect(p.positionTokenId, recipient);
+        emit FeesCollected(policyId, recipient, amount0, amount1);
+    }
+
+    /// @inheritdoc ICoverVault
+    /// @dev Only before endsAt, so no settle cursor exists yet and swap-and-pop on the
+    ///      settle queue is safe (R16). `reserved` is released and the live-policy slot
+    ///      freed; the premium stays in the cohort (tracked for the keeper skim at
+    ///      finalize, U6). The NFT goes back with `transferFrom`, parked if that fails.
+    function cancel(uint256 policyId) external nonReentrant {
+        Policy storage p = _policies[policyId];
+        if (msg.sender != p.owner) revert NotPolicyOwner(policyId);
+        if (p.status != PolicyStatus.Active) revert PolicyNotActive(policyId);
+        uint32 cohortId = p.cohortId;
+        if (block.timestamp >= _endsAt(cohortId)) revert NotActive(cohortId);
+
+        Cohort storage c = _cohorts[cohortId];
+        uint256[] storage queue = _cohortPolicies[cohortId];
+        uint32 idx = p.queueIndex;
+        uint256 lastId = queue[queue.length - 1];
+        queue[idx] = lastId;
+        _policies[lastId].queueIndex = idx;
+        queue.pop();
+
+        c.policyCount -= 1;
+        c.reserved -= p.maxPayout;
+        c.cancelledPremiums += p.premium;
+        p.status = PolicyStatus.Cancelled;
+
+        emit PolicyCancelled(policyId, cohortId, p.premium);
+        _returnPosition(policyId, p);
+    }
+
+    /// @inheritdoc ICoverVault
+    /// @dev Defense path (plan "Pengembalian NFT"): on the real NFPM a hook-less
+    ///      `transferFrom` back to the owner practically cannot fail.
+    function claimPosition(uint256 policyId) external nonReentrant {
+        Policy storage p = _policies[policyId];
+        if (msg.sender != p.owner) revert NotPolicyOwner(policyId);
+        if (!p.nftParked) revert NotParked(policyId);
+        p.nftParked = false;
+        uint256 tokenId = p.positionTokenId;
+        positionManager.transferFrom(address(this), msg.sender, tokenId);
+        emit PositionClaimed(policyId, tokenId, msg.sender);
+    }
+
+    /// @notice ERC721 receive hook. Accepts only a transfer the vault itself operates
+    ///         while one of its own actions is in flight (the reentrancy lock doubles as
+    ///         the in-flight flag); every unsolicited `safeTransferFrom` is rejected.
+    ///         `buyCover` uses plain `transferFrom`, so in practice this always reverts.
+    ///         A plain `transferFrom` to the vault runs no hook and cannot be refused —
+    ///         such an NFT is unrecoverable (see contract NatSpec).
+    function onERC721Received(address operator, address, uint256 tokenId, bytes calldata)
+        external
+        view
+        returns (bytes4)
+    {
+        if (msg.sender != address(positionManager) || operator != address(this) || _locked != 2) {
+            revert UnsolicitedPosition(tokenId);
+        }
+        return this.onERC721Received.selector;
     }
 
     // ---------------------------------------------------------------------
@@ -413,44 +552,41 @@ contract CoverVault is ICoverVault {
     }
 
     /// @inheritdoc ICoverVault
-    /// @dev O(n). Finalizes lazily if needed, then pushes payout to each LP; a reverting
-    ///      recipient is parked in `unclaimed` so it cannot block the batch (§7.3).
-    ///      `reserved` is released per policy so I1 holds mid-batch.
-    ///      TODO(U5): per-policy settle (anyone), policy status enum (skip final ones,
-    ///      resolved = finalCount == policyCount), baseline window + refund when fewer
-    ///      than 2 returns follow the baseline, NFT return / parking.
-    ///      TODO(U6): keeper skim per measured policy and the settle bounty.
+    /// @dev Walks up to `n` positions of the settle queue from the cursor, finalizing
+    ///      lazily first. Policies already settled out of order by `settlePolicy` are
+    ///      skipped; the cohort resolves when every live policy is final, independent of
+    ///      the cursor. A reverting recipient is parked in `unclaimed` and cannot block
+    ///      the batch (§7.3); a failed NFT return is parked too.
     function settleBatch(uint32 cohortId, uint32 n) external nonReentrant {
         Cohort storage c = _cohorts[cohortId];
         if (_status(cohortId, c) != Status.SETTLING) revert NotSettling(cohortId);
         if (!c.finalized) _finalize(cohortId, c);
 
-        uint32 cursor = c.settledCount;
-        uint32 end = cursor + n;
+        uint256 cursor = c.settleCursor;
+        uint256 end = cursor + n;
         if (end > c.policyCount) end = c.policyCount;
 
-        if (cursor < end) {
-            uint256[] storage ids = _cohortPolicies[cohortId];
-            uint128 endSumSq = accumulator.sampleAt(c.endIndex).cumulativeSumSq;
-
-            for (uint32 i = cursor; i < end; i++) {
-                uint256 policyId = ids[i];
-                Policy storage p = _policies[policyId];
-                uint128 payout = _computePayout(p, endSumSq);
-
-                p.settled = true;
-                c.reserved -= p.maxPayout; // release exactly maxPayout, whatever the outcome
-                if (payout > 0) {
-                    c.claimsPaid += payout;
-                    // A parked payout stays an obligation until claimUnclaimed.
-                    if (_pushPayout(p.owner, payout)) _obligations -= payout;
-                }
-                emit PolicySettled(policyId, cohortId, payout);
-            }
+        uint256[] storage queue = _cohortPolicies[cohortId];
+        for (uint256 i = cursor; i < end; i++) {
+            uint256 policyId = queue[i];
+            Policy storage p = _policies[policyId];
+            if (p.status != PolicyStatus.Active) continue; // already final
+            _settleOne(policyId, p, c);
         }
+        if (end > cursor) c.settleCursor = uint32(end);
+    }
 
-        c.settledCount = end;
-        if (end == c.policyCount) c.status = Status.SETTLED;
+    /// @inheritdoc ICoverVault
+    /// @dev Permissionless after endsAt (plan I3 of the flow analysis): an LP need not
+    ///      wait for a batch. Same outcome as through settleBatch, which then skips it.
+    function settlePolicy(uint256 policyId) external nonReentrant {
+        Policy storage p = _policies[policyId];
+        uint32 cohortId = p.cohortId;
+        Cohort storage c = _cohorts[cohortId];
+        if (_status(cohortId, c) != Status.SETTLING) revert NotSettling(cohortId);
+        if (p.status != PolicyStatus.Active) revert PolicyNotActive(policyId);
+        if (!c.finalized) _finalize(cohortId, c);
+        _settleOne(policyId, p, c);
     }
 
     // ---------------------------------------------------------------------
@@ -573,9 +709,13 @@ contract CoverVault is ICoverVault {
     /// @dev Per-policy payout (§7.2). No annualization: strike is scaled to the
     ///      covered window, payout is over accumulated variance. `min` with maxPayout
     ///      comes AFTER the multiply, and everything rounds toward less payout.
-    function _computePayout(Policy storage p, uint128 endSumSq) internal view returns (uint128) {
-        // sumSqCovered = cumulativeSumSq[endIndex] − policy.startSumSq (§6.2).
-        uint128 sumSqCovered = endSumSq >= p.startSumSq ? endSumSq - p.startSumSq : 0;
+    function _computePayout(Policy storage p, uint128 startSumSq, uint128 endSumSq)
+        internal
+        view
+        returns (uint128)
+    {
+        // sumSqCovered = cumulativeSumSq[endIndex] − cumulativeSumSq[baseline] (§6.2).
+        uint128 sumSqCovered = endSumSq >= startSumSq ? endSumSq - startSumSq : 0;
 
         // strikeAccumulated = strikeAnnualized × coveredSeconds / SECONDS_PER_YEAR,
         // rounded UP so the threshold is a touch harder to cross (§9.2).
@@ -596,6 +736,93 @@ contract CoverVault is ICoverVault {
         uint256 mp = uint256(varNotional).mulDivDown(maxExcessVariance, WAD);
         if (mp > type(uint96).max) revert MaxPayoutOverflow(mp);
         return uint96(mp);
+    }
+
+    // ---------------------------------------------------------------------
+    // Internal — policy settlement & escrow
+    // ---------------------------------------------------------------------
+
+    /// @dev Settle one Active policy of a finalized cohort. Baseline (plan "Pengukuran"):
+    ///      the first sample s whose predecessor s−1 is at/after the purchase time, so the
+    ///      inter-sample TWAP of every sample used covers only post-purchase prices
+    ///      (SC-02, AE2); returns counted are those in (s, endIndex]. Fewer than 2 →
+    ///      Refunded: full premium back (out of the cohort's premiums). Otherwise measured
+    ///      as §7.2. Either way `reserved` is released and the NFT returned. Canonical
+    ///      `PolicySettled` first (preceded by `Unclaimed` iff the payout parked), then
+    ///      the v2 events. Effects before interactions.
+    function _settleOne(uint256 policyId, Policy storage p, Cohort storage c) internal {
+        uint32 cohortId = p.cohortId;
+        address owner = p.owner;
+        uint32 s = _baselineIndex(p.purchasedAt);
+
+        c.reserved -= p.maxPayout; // release exactly maxPayout, whatever the outcome
+        uint32 done = c.settledCount + 1;
+        c.settledCount = done;
+        if (done == c.policyCount) c.status = Status.SETTLED;
+        p.startIndex = s;
+
+        if (uint256(s) + 2 <= c.endIndex) {
+            // ≥ 2 returns after the baseline
+            uint128 startSumSq = accumulator.sampleAt(s).cumulativeSumSq;
+            uint128 endSumSq = accumulator.sampleAt(c.endIndex).cumulativeSumSq;
+            p.startSumSq = startSumSq;
+            p.status = PolicyStatus.Settled;
+            uint128 payout = _computePayout(p, startSumSq, endSumSq);
+            if (payout > 0) {
+                c.claimsPaid += payout;
+                // A parked payout stays an obligation until claimUnclaimed.
+                if (_pushPayout(owner, payout)) _obligations -= payout;
+            }
+            emit PolicySettled(policyId, cohortId, payout);
+            // TODO(U6): keeper skim of this measured policy's premium + settle bounty.
+        } else {
+            uint128 premium = p.premium;
+            p.status = PolicyStatus.Refunded;
+            c.premiumsCollected -= premium;
+            emit PolicySettled(policyId, cohortId, 0);
+            if (premium > 0 && _pushPayout(owner, premium)) _obligations -= premium;
+            emit PolicyRefunded(policyId, cohortId, premium);
+        }
+        _returnPosition(policyId, p);
+    }
+
+    /// @dev Window baseline for a purchase at `purchasedAt`: j = first sample with
+    ///      timestamp ≥ purchasedAt, baseline s = j + 1. A sample exists at/before the
+    ///      purchase (buyCover requires one), so the lookup cannot miss. s may lie past
+    ///      the last sample; the caller then counts no returns.
+    function _baselineIndex(uint32 purchasedAt) internal view returns (uint32) {
+        uint32 k = accumulator.indexAtOrBefore(purchasedAt);
+        uint32 j = accumulator.sampleAt(k).timestamp == purchasedAt ? k : k + 1;
+        return j + 1;
+    }
+
+    /// @dev NFT out of escrow with a hook-less `transferFrom` (a contract owner cannot
+    ///      block it), gas-capped and caught: on failure the NFT is parked for
+    ///      `claimPosition` and settlement carries on (R17, AE9).
+    function _returnPosition(uint256 policyId, Policy storage p) internal {
+        address owner = p.owner;
+        uint256 tokenId = p.positionTokenId;
+        try positionManager.transferFrom{gas: NFT_RETURN_GAS}(address(this), owner, tokenId) {
+            emit PositionReturned(policyId, tokenId, owner);
+        } catch {
+            p.nftParked = true;
+            emit PositionParked(policyId, tokenId, owner);
+        }
+    }
+
+    /// @dev Collect every fee owed on an escrowed position to `recipient`.
+    function _collect(uint256 tokenId, address recipient)
+        internal
+        returns (uint256 amount0, uint256 amount1)
+    {
+        return positionManager.collect(
+            INonfungiblePositionManager.CollectParams({
+                tokenId: tokenId,
+                recipient: recipient,
+                amount0Max: type(uint128).max,
+                amount1Max: type(uint128).max
+            })
+        );
     }
 
     // ---------------------------------------------------------------------
@@ -621,8 +848,8 @@ contract CoverVault is ICoverVault {
             ewmaEverUpdated = true;
         }
 
-        // TODO(U6): skim the keeper cut of cancelled premiums into the keeper budget here
-        //           (cancelled policies have left the settle queue).
+        // TODO(U6): skim the keeper cut of `c.cancelledPremiums` into the keeper budget
+        //           here (cancelled policies have left the settle queue).
 
         // Residual (direct transfers, dust of fully exited cohorts) joins this cohort's
         // premium pool, so its underwriters own it from now on (R5).
@@ -790,11 +1017,15 @@ contract CoverVault is ICoverVault {
         return uint32(e - from);
     }
 
+    /// @dev The position belongs to this vault's pool and holds liquidity (a zero-
+    ///      liquidity position has no gamma to cover).
     function _requirePositionMatchesPool(uint256 positionTokenId) internal view {
-        (,, address t0, address t1, uint24 f,,,,,,,) = positionManager.positions(positionTokenId);
+        (,, address t0, address t1, uint24 f,,, uint128 liquidity,,,,) =
+            positionManager.positions(positionTokenId);
         if (t0 != poolToken0 || t1 != poolToken1 || f != poolFee) {
             revert PositionWrongPool(positionTokenId);
         }
+        if (liquidity == 0) revert ZeroLiquidity(positionTokenId);
     }
 
     // ---------------------------------------------------------------------
@@ -817,7 +1048,7 @@ contract CoverVault is ICoverVault {
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
-    /// @dev Gas-limited payout push inside settleBatch. A recipient that reverts or
+    /// @dev Gas-limited payout / refund push at settle. A recipient that reverts or
     ///      burns gas is parked in `unclaimed` and the batch continues (§7.3).
     ///      Returns whether the tokens actually left the vault.
     function _pushPayout(address to, uint128 amount) internal returns (bool sent) {

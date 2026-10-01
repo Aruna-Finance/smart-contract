@@ -53,6 +53,7 @@ contract ArunaFactory {
         uint16 ewmaAlphaBps;
         uint128 seedVariance;
         uint32 sampleInterval; // accumulator: first vault per pool only
+        uint32 policyCap; // max live policies per cohort (R24)
     }
 
     error BadConfig();
@@ -106,7 +107,8 @@ contract ArunaFactory {
                 p.maxUtilizationBps,
                 p.maxExcessVariance,
                 p.ewmaAlphaBps,
-                p.seedVariance
+                p.seedVariance,
+                p.policyCap
             )
         );
 

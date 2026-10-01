@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {MockERC20} from "./MockERC20.sol";
 import {MockUniswapV3Pool} from "./MockUniswapV3Pool.sol";
+import {INonfungiblePositionManager} from "../../src/interfaces/INonfungiblePositionManager.sol";
 import {MockPositionManager} from "./MockPositionManager.sol";
 import {MockAccumulator} from "./MockAccumulator.sol";
 import {RejectingReceiver} from "./RejectingReceiver.sol";
@@ -47,7 +48,7 @@ contract MocksTest is Test {
 
     function _collectAll(address recipient) internal returns (uint256, uint256) {
         return pm.collect(
-            MockPositionManager.CollectParams({
+            INonfungiblePositionManager.CollectParams({
                 tokenId: ID,
                 recipient: recipient,
                 amount0Max: type(uint128).max,

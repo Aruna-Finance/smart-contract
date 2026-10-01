@@ -55,6 +55,7 @@ contract CoverVaultCalendarTest is Test {
     uint128 internal constant MAX_EXCESS = uint128(WAD);
     uint16 internal constant ALPHA_BPS = 2_000;
     uint128 internal constant SEED_VAR = uint128(WAD / 10);
+    uint32 internal constant POLICY_CAP = 100;
 
     MockERC20 internal token;
     MockUniswapV3Pool internal pool;
@@ -97,7 +98,8 @@ contract CoverVaultCalendarTest is Test {
             UTIL_BPS,
             MAX_EXCESS,
             ALPHA_BPS,
-            SEED_VAR
+            SEED_VAR,
+            POLICY_CAP
         );
 
         address[4] memory actors = [uw1, uw2, uw3, lp];
@@ -105,6 +107,8 @@ contract CoverVaultCalendarTest is Test {
             token.mint(actors[i], 1_000_000e6);
             vm.prank(actors[i]);
             token.approve(address(vault), type(uint256).max);
+            vm.prank(actors[i]);
+            pm.setApprovalForAll(address(vault), true); // buyCover escrows the NFT
         }
         vm.warp(ANCHOR - 1 days);
     }
@@ -613,6 +617,7 @@ contract CoverVaultCalendarTest is Test {
     function _newPosition(address owner) internal returns (uint256 id) {
         id = nextTokenId++;
         pm.setOwner(id, owner);
+        pm.setPosition(id, -600, 600, 1e18); // live liquidity (zero is refused)
     }
 
     function _buy(uint32 n, uint128 varNotional, uint128 premium) internal returns (uint256) {
