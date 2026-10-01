@@ -46,7 +46,6 @@ import {PositionValuer} from "../src/PositionValuer.sol";
 ///           ARUNA_EWMA_ALPHA_BPS     uint16   EWMA smoothing (bps)
 ///           ARUNA_SEED_VARIANCE      uint128  initial ewmaVariance (WAD)
 ///           ARUNA_SAMPLE_INTERVAL    uint32   accumulator sample cadence (first tenor only)
-///           ARUNA_TWAP_WINDOW        uint32   accumulator TWAP window   (first tenor only)
 ///
 ///           ARUNA_PRICER_MIN_PREMIUM uint128  floor premium (settlement units)
 ///           ARUNA_PRICER_LOAD_BPS    uint16   underwriter load (bps, <= 5000)
@@ -107,8 +106,7 @@ contract DeployMarket is Script {
             maxExcessVariance: _u128(vm.envUint("ARUNA_MAX_EXCESS_VARIANCE")),
             ewmaAlphaBps: _u16(vm.envUint("ARUNA_EWMA_ALPHA_BPS")),
             seedVariance: _u128(vm.envUint("ARUNA_SEED_VARIANCE")),
-            sampleInterval: _u32(vm.envUint("ARUNA_SAMPLE_INTERVAL")),
-            twapWindow: _u32(vm.envUint("ARUNA_TWAP_WINDOW"))
+            sampleInterval: _u32(vm.envUint("ARUNA_SAMPLE_INTERVAL"))
         });
 
         vm.startBroadcast();

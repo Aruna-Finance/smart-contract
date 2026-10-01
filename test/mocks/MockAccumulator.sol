@@ -105,7 +105,8 @@ contract MockAccumulator is IVarianceAccumulator {
                 timestamp: timestamp,
                 tickCumulative: int56(0),
                 avgTick: int24(0),
-                cumulativeSumSq: cumulativeSumSq
+                cumulativeSumSq: cumulativeSumSq,
+                elapsed: uint16(0)
             })
         );
         emit Poked(uint32(_samples.length - 1), timestamp, int24(0), cumulativeSumSq);

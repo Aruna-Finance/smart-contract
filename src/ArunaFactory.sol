@@ -39,7 +39,7 @@ contract ArunaFactory {
 
     /// @notice Per-call market parameters. Grouped in a struct so the wiring stays
     ///         readable and the call never hits stack-too-deep. The accumulator config
-    ///         (sampleInterval, twapWindow) is consulted ONLY when the pool has no
+    ///         (sampleInterval) is consulted ONLY when the pool has no
     ///         accumulator yet; on later tenors of the same pool it is ignored.
     struct VaultParams {
         address pool;
@@ -52,7 +52,6 @@ contract ArunaFactory {
         uint16 ewmaAlphaBps;
         uint128 seedVariance;
         uint32 sampleInterval; // accumulator: first vault per pool only
-        uint32 twapWindow; // accumulator: first vault per pool only
     }
 
     error BadConfig();
@@ -87,7 +86,7 @@ contract ArunaFactory {
         // One accumulator per pool, shared by all tenors: deploy lazily, reuse after.
         address acc = accumulatorOf[p.pool];
         if (acc == address(0)) {
-            acc = address(new VarianceAccumulator(p.pool, p.sampleInterval, p.twapWindow));
+            acc = address(new VarianceAccumulator(p.pool, p.sampleInterval));
             accumulatorOf[p.pool] = acc;
             emit AccumulatorCreated(p.pool, acc);
         }

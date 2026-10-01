@@ -95,15 +95,6 @@ contract MocksTest is Test {
         return _observe(ago);
     }
 
-    function test_Pool_LegacyWindowMode() public {
-        pool.setAvgTick(42);
-        uint32[] memory s = new uint32[](2);
-        s[0] = 1800;
-        s[1] = 0;
-        (int56[] memory tc,) = pool.observe(s);
-        assertEq((tc[1] - tc[0]) / 1800, int56(42), "window twap == avgTick");
-    }
-
     // --- position manager ---------------------------------------------
 
     function test_PM_SetOwnerMints() public view {
