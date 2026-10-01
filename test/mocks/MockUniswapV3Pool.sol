@@ -4,19 +4,78 @@ pragma solidity ^0.8.24;
 import {IUniswapV3PoolMinimal} from "../../src/interfaces/IUniswapV3PoolMinimal.sol";
 
 /// @title MockUniswapV3Pool
-/// @notice Test double for a Uniswap v3 pool's `observe()`. The test drives the
-///         window TWAP tick directly via `setAvgTick`: for a call
-///         `observe([window, 0])` it returns tickCumulatives such that
-///         (tc[1] - tc[0]) / window == avgTick, i.e. tc[0]=0, tc[1]=avgTick*window.
+/// @notice Test double for a Uniswap v3 pool's oracle. Two modes:
+///
+///         Time mode (default, v2): the pool has a current tick, and tickCumulative
+///         advances by `tick · Δt` with block time, exactly like Uniswap's oracle.
+///         `setTick` first checkpoints the cumulative at now, then switches tick, so
+///         `observe([0])` deltas between two samples give the inter-sample TWAP
+///         (design §3.2). `observe(secondsAgo > 0)` is reconstructed from the
+///         checkpoints; asking for a time before the first checkpoint reverts "OLD",
+///         as Uniswap does when the oracle history is too short.
+///
+///         Legacy window mode (v0 tests): entered by `setAvgTick` / `setBaseCumulative`.
+///         `observe([window, 0])` returns tc[1] = base and tc[0] = base − avgTick·window,
+///         so the fixed-window TWAP equals `avgTick` regardless of time. Kept only so the
+///         v0 accumulator tests keep passing until U3 moves to `observe([0])`.
 contract MockUniswapV3Pool is IUniswapV3PoolMinimal {
-    int24 public avgTick;
-    int56 public baseCumulative; // added to tc[1] so stored tickCumulative can advance
+    struct Checkpoint {
+        uint32 timestamp;
+        int56 tickCumulative; // cumulative at `timestamp`
+        int24 tick; // tick in force from `timestamp` until the next checkpoint
+    }
 
+    Checkpoint[] internal _checkpoints;
+
+    // --- legacy window mode ---
+    bool public legacyMode;
+    int24 public avgTick;
+    int56 public baseCumulative;
+
+    // --- pool identity (settable so factory/vault pool matching can be tested) ---
+    address public token0;
+    address public token1;
+    uint24 public fee = 3000;
+
+    error OLD();
+
+    constructor() {
+        _checkpoints.push(Checkpoint(uint32(block.timestamp), 0, 0));
+    }
+
+    function setTokens(address token0_, address token1_, uint24 fee_) external {
+        token0 = token0_;
+        token1 = token1_;
+        fee = fee_;
+    }
+
+    /// @notice Time mode: checkpoint the cumulative at now, then switch the tick.
+    function setTick(int24 tick_) external {
+        legacyMode = false;
+        uint32 nowTs = uint32(block.timestamp);
+        int56 cumNow = _cumulativeAt(nowTs);
+        Checkpoint storage last = _checkpoints[_checkpoints.length - 1];
+        if (last.timestamp == nowTs) {
+            last.tick = tick_; // same-second update: latest tick wins
+        } else {
+            _checkpoints.push(Checkpoint(nowTs, cumNow, tick_));
+        }
+    }
+
+    /// @notice Current tick in time mode.
+    function currentTick() public view returns (int24) {
+        return _checkpoints[_checkpoints.length - 1].tick;
+    }
+
+    /// @notice Legacy window mode: fix the window TWAP returned by `observe([w, 0])`.
     function setAvgTick(int24 avgTick_) external {
+        legacyMode = true;
         avgTick = avgTick_;
     }
 
+    /// @notice Legacy window mode: offset applied to the "now" cumulative.
     function setBaseCumulative(int56 base_) external {
+        legacyMode = true;
         baseCumulative = base_;
     }
 
@@ -31,35 +90,31 @@ contract MockUniswapV3Pool is IUniswapV3PoolMinimal {
         tickCumulatives = new int56[](secondsAgos.length);
         secondsPerLiquidityCumulativeX128s = new uint160[](secondsAgos.length);
 
-        // secondsAgos is expected to be [window, 0]. tc at `window` ago = base;
-        // tc now = base + avgTick*window, so the delta over the window == avgTick*window.
         for (uint256 i = 0; i < secondsAgos.length; i++) {
             uint32 ago = secondsAgos[i];
-            if (ago == 0) {
-                // "now": include the full window's worth of avgTick on top of base.
-                tickCumulatives[i] = baseCumulative;
-            } else {
-                // `ago` seconds back: base minus avgTick*ago.
+            if (legacyMode) {
                 tickCumulatives[i] = baseCumulative - int56(avgTick) * int56(uint56(ago));
+            } else {
+                if (ago > block.timestamp) revert OLD();
+                tickCumulatives[i] = _cumulativeAt(uint32(block.timestamp - ago));
             }
         }
     }
 
-    // --- unused surface, present to satisfy the interface ---
-
-    function slot0() external pure returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
-        return (0, 0, 0, 0, 0, 0, true);
+    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
+        return (0, legacyMode ? avgTick : currentTick(), 0, 0, 0, 0, true);
     }
 
-    function token0() external pure returns (address) {
-        return address(0);
-    }
-
-    function token1() external pure returns (address) {
-        return address(0);
-    }
-
-    function fee() external pure returns (uint24) {
-        return 3000;
+    /// @dev Cumulative at `t`: the latest checkpoint at-or-before `t`, extrapolated
+    ///      linearly with the tick in force since then.
+    function _cumulativeAt(uint32 t) internal view returns (int56) {
+        uint256 n = _checkpoints.length;
+        for (uint256 i = n; i > 0; i--) {
+            Checkpoint memory c = _checkpoints[i - 1];
+            if (c.timestamp <= t) {
+                return c.tickCumulative + int56(c.tick) * int56(uint56(t - c.timestamp));
+            }
+        }
+        revert OLD();
     }
 }
