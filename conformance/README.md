@@ -59,10 +59,12 @@ unless the ledger's `status` is `"green"` and its `rcManifest` equals `ARUNA_RC_
 - Pending rows:
   - SSOT §8 chain links (CH-1..CH-6) and RC scenarios: no RC has run yet.
   - SC-08: the fork replay needs `ARBITRUM_RPC_URL`.
-  - SC-18, SC-21, SC-24: documentation work for U11.
 - n-a rows:
   - SC-20: compiler pin, a build setting.
   - RC-NFT-PARKED: cannot be triggered on the real NFPM. A unit test proves it.
+  - SC-18, SC-24: documentation-only findings, reconciled in U11 (2026-10-01) in `context/`
+    (SSOT, design, integration requirements). No Foundry test can assert them. SC-21 is green: the
+    out-of-spec items were lifted into the design doc, and their behavior is tested.
 - `rcManifest` is `null`, so the release guard refuses to deploy.
 
 ## Running the checker

@@ -259,8 +259,8 @@
       "mapsTo": "U11",
       "tests": [],
       "rcTx": [],
-      "status": "pending",
-      "reason": "Murni dokumen; dikerjakan di U11 (rekonsiliasi SSOT/DSN/INT). Hijau setelah U11 mendarat dan dokumen merujuk ledger ini."
+      "status": "n-a",
+      "reason": "Temuan dokumen murni, tanpa perilaku kontrak yang bisa ditegaskan tes Foundry. Direkonsiliasi 2026-10-01 (U11) ke kode v2 sebagai kanon nama: context/aruna - desain smart contract.md (a: EXPIRED dihapus, status turunan §4.1; b: rollTo dua argumen §5.4/§8.2; c: tanpa cumulativeSumSq(...), §2/§8.1 memakai sampleAt(i).cumulativeSumSq; d: maxPayout uint96 di §6.0/§8.2; g: placeholder maxPayout 10% dihapus, maxExcessVariance di tabel §11.2; h: §1/§11.1 diperbarui; j: deployer + IPositionValuer, tanpa VarianceMath, I8 + I-KEEPER; k: keeperBudget di vault §4.3/§9; l: unclaimed/claimUnclaimed di §7.3/§8.2; m: poke tanpa batas status §4.1) dan context/contract-integration-requirements.md (i: teks display-only basi dihapus, catatan SUPERSEDED dipertahankan). Sub-temuan e (diagram excalidraw tanpa /WAD) di luar U11: diagram bukan dokumen otoritatif (SSOT urutan otoritas #4)."
     },
     {
       "id": "SC-19",
@@ -291,15 +291,14 @@
       "id": "SC-21",
       "kind": "out-of-spec",
       "requirements": ["R32"],
-      "description": "Kode/aset di luar spek (event Poked/Withdrawn/Rolled/..., view statusOf/currentCohortId/policyCount, claimUnclaimed, ewmaAlphaBps/seedVariance, tooling testnet). Perilakunya diuji di v2; vault uji 1 jam v0 ditandai known-bug (R31). Sisa: diangkat ke DSN.",
+      "description": "Kode/aset di luar spek (event Poked/Withdrawn/Rolled/Finalized/Unclaimed/Claimed, view statusOf/currentCohortId/policyCount, claimUnclaimed, ewmaAlphaBps/seedVariance, PUSH_GAS, tooling testnet) diangkat ke spek: desain §4.1/§4.3/§6.3/§7.3/§8 (2026-10-01, U11) dan perilakunya diuji di v2. Vault uji 1 jam v0 ditandai known-bug (R31) dan tidak didaftarkan.",
       "mapsTo": "U11",
       "tests": [
         "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE9_RejectingReceiver_PayoutParked_NftDelivered",
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_Calendar_Formula_AndCurrentCohort"
       ],
       "rcTx": [],
-      "status": "pending",
-      "reason": "Pengangkatan event/view/parameter tambahan ke DSN adalah pekerjaan dokumen U11 (R32)."
+      "status": "green"
     },
     {
       "id": "SC-22",
@@ -341,8 +340,8 @@
       "mapsTo": "U11",
       "tests": [],
       "rcTx": [],
-      "status": "pending",
-      "reason": "Murni dokumen; dikerjakan di U11 (Lampiran A INT, chain 421614, NFPM bukan mock)."
+      "status": "n-a",
+      "reason": "Temuan dokumen murni (INT vs ABI), tanpa perilaku kontrak yang bisa ditegaskan tes Foundry. Direkonsiliasi 2026-10-01 (U11): context/contract-integration-requirements.md G4 dan Lampiran A disalin dari src/interfaces + ArunaFactory dan dicek terhadap ABI hasil build (getter cohort/policy/deposits/settlementToken/statusOf/currentCohortId; factory allVaults/allVaultsLength/vaultsOf/isVault/accumulatorOf + VaultCreated(VaultParams); event CoverBought + event v2), chain guard 421614, NFPM 0x6b29…4d65 dicatat sebagai NFPM Uniswap asli, alamat v0 ditandai known-bug dan sumber alamat v2 = manifest smart-contract/deployments/. Checklist FE/indexer diberi catatan v2 bertanggal."
     },
     {
       "id": "I1",
