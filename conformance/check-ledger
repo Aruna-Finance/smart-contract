@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# check-ledger — verify conformance/ledger.json against Foundry test results and, for rows
+# that cite release-candidate transactions, against the chain (plan U10, R26, AE12).
+#
+# Usage:
+#   conformance/check-ledger [--ledger PATH] [--forge-json FILE]... [--offline] [--rpc-url URL]
+#
+#   --ledger PATH      ledger file (default conformance/ledger.json)
+#   --forge-json FILE  `forge test --json` output to read instead of running forge. Repeatable
+#                      (e.g. the default suite plus a FOUNDRY_PROFILE=fork run): a test counts
+#                      as passed when it passed in some file and failed in none.
+#   --offline          structure + tests only; never touches an RPC. A green row that cites
+#                      rcTx is refused (it cannot be verified offline).
+#   --rpc-url URL      RPC for rcTx verification (default: $ARUNA_LEDGER_RPC_URL). Without
+#                      one the checker behaves as --offline.
+#
+# Requirements: bash 3.2+, jq; forge (unless every --forge-json is given); cast (only with RPC).
+# Exit status: 0 when the ledger is consistent, 1 on any violation, 2 on usage/setup errors.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LEDGER="conformance/ledger.json"
+FORGE_JSONS=()
+OFFLINE=0
+RPC_URL="${ARUNA_LEDGER_RPC_URL:-}"
+
+die() { echo "check-ledger: $*" >&2; exit 2; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --ledger) LEDGER="${2:?--ledger needs a path}"; shift 2 ;;
+    --forge-json) FORGE_JSONS+=("${2:?--forge-json needs a file}"); shift 2 ;;
+    --offline) OFFLINE=1; shift ;;
+    --rpc-url) RPC_URL="${2:?--rpc-url needs a url}"; shift 2 ;;
+    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+command -v jq >/dev/null 2>&1 || die "jq is required"
+cd "$ROOT"
+[ -f "$LEDGER" ] || die "ledger not found: $LEDGER"
+jq -e 'type == "object"' "$LEDGER" >/dev/null 2>&1 || die "ledger is not a JSON object: $LEDGER"
+
+ONLINE=1
+if [ "$OFFLINE" = 1 ] || [ -z "$RPC_URL" ]; then ONLINE=0; fi
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/check-ledger.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
+
+# ---------------------------------------------------------------------------------------------
+# 1. Test results → {"path:Contract:test": "Success" | "Failure" | "Skipped"}
+#    Invariant suites report one entry per contract with the individual invariant_* results
+#    under `invariant_predicate_results`; those are expanded so a row can cite each one.
+# ---------------------------------------------------------------------------------------------
+if [ ${#FORGE_JSONS[@]} -eq 0 ]; then
+  command -v forge >/dev/null 2>&1 || die "forge is required (or pass --forge-json)"
+  echo "check-ledger: running forge test --json ..." >&2
+  set +e
+  forge test --json >"$TMP/forge.raw" 2>"$TMP/forge.err"
+  set -e
+  # forge prints one JSON object; keep the last line that parses as one.
+  grep '^{' "$TMP/forge.raw" | tail -n 1 >"$TMP/forge.json" || true
+  if ! jq -e 'type == "object" and length > 0' "$TMP/forge.json" >/dev/null 2>&1; then
+    cat "$TMP/forge.err" >&2
+    die "forge test produced no JSON results (compile error?)"
+  fi
+  FORGE_JSONS=("$TMP/forge.json")
+fi
+for f in "${FORGE_JSONS[@]}"; do
+  jq -e 'type == "object"' "$f" >/dev/null 2>&1 || die "not a forge test --json object: $f"
+done
+
+jq -s '
+  [ .[] | to_entries[] | .key as $suite | .value.test_results | to_entries[]
+    | ($suite + ":" + (.key | sub("\\(.*$"; ""))) as $id
+    | {id: $id, status: .value.status},
+      ( (.value.invariant_predicate_results // [])[]
+        | {id: ($suite + ":" + (.name | sub("\\(.*$"; ""))), status: .status} )
+  ]
+  | group_by(.id)
+  | map({ key: .[0].id,
+          value: ( [.[].status] as $s
+                   | if any($s[]; . == "Failure") then "Failure"
+                     elif any($s[]; . == "Success") then "Success"
+                     else ($s[0] // "Skipped") end ) })
+  | from_entries
+' "${FORGE_JSONS[@]}" >"$TMP/results.json"
+
+# ---------------------------------------------------------------------------------------------
+# 2. Structural + test checks (pure jq). Emits {errors: [...], rows: [...], computed}.
+# ---------------------------------------------------------------------------------------------
+jq --slurpfile results "$TMP/results.json" --argjson online "$ONLINE" '
+  $results[0] as $R
+  | def req_ids:
+      ([range(1; 25)] | map("SC-" + (if . < 10 then "0" else "" end) + tostring))
+      + ([range(1; 9)] | map("I" + tostring)) + ["I-KEEPER"]
+      + ([range(1; 7)] | map("CH-" + tostring))
+      + ([range(1; 13)] | map("AE" + tostring))
+      + ["RC-PAY", "RC-NOPAY", "RC-REFUND", "RC-ROLL-N1", "RC-ROLL-N2-LATE", "RC-CANCEL",
+         "RC-COLLECT-FEES", "RC-PAYOUT-PARKED", "RC-NFT-PARKED", "RC-KEEPER-CYCLE"];
+    def kinds: ["bug", "unbuilt", "decision", "out-of-spec", "doc", "invariant", "chain",
+                "acceptance", "rc-scenario", "release-profile"];
+    def statuses: ["green", "red", "pending", "n-a"];
+    def nonempty: type == "string" and length > 0;
+    (.rows // []) as $rows
+  | ($rows | map(.id)) as $ids
+  | [
+      # ---- top level ----
+      (if (.rows | type) != "array" then "top: \"rows\" must be an array" else empty end),
+      (.status as $st | if ($st | type) != "string" or ((statuses | index($st)) == null)
+         then "top: \"status\" must be one of green|red|pending|n-a (got \(.status | tojson))"
+       else empty end),
+      (if (.rcManifest != null) and ((.rcManifest | nonempty) | not)
+         then "top: \"rcManifest\" must be null or a non-empty path" else empty end),
+      (if ((.updatedAt // "") | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}")) | not
+         then "top: \"updatedAt\" must be an ISO date" else empty end),
+      (if .status == "green" and (.rcManifest | nonempty | not)
+         then "top: a green ledger must name its rcManifest (release guard reads it)"
+       else empty end),
+      # ---- coverage ----
+      (req_ids[] as $r | if ($ids | index($r)) == null then "coverage: missing row \($r)" else empty end),
+      ($ids | group_by(.) | map(select(length > 1) | .[0])[] | "coverage: duplicate row id \(.)"),
+      ($R | keys[] | select(startswith("test/ReleaseProfile.t.sol:")) as $t
+        | if any($rows[]; .kind == "release-profile" and ((.tests // []) | index($t)) != null)
+          then empty else "coverage: release-profile test \($t) is not cited by any release-profile row" end),
+      # ---- rows ----
+      ($rows[] | . as $row | (.id // "<no id>") as $id
+        | (if (.id | nonempty | not) then "row \($id): missing id" else empty end),
+          (if (kinds | index($row.kind)) == null then "row \($id): unknown kind \($row.kind | tojson)" else empty end),
+          (if (statuses | index($row.status)) == null then "row \($id): unknown status \($row.status | tojson)" else empty end),
+          (if ($row.description | nonempty | not) then "row \($id): missing description" else empty end),
+          (if ($row.requirements | type) != "array" then "row \($id): requirements must be an array of R-IDs"
+           else ($row.requirements[] | select((type != "string") or (test("^R[0-9]+$") | not))
+                 | "row \($id): bad requirement ref \(tojson)") end),
+          (if ($row.tests | type) != "array" then "row \($id): tests must be an array" else empty end),
+          (if ($row.rcTx | type) != "array" then "row \($id): rcTx must be an array" else empty end),
+          (if ($row.status == "n-a" or $row.status == "pending") and ($row.reason | nonempty | not)
+             then "row \($id): status \($row.status) requires a reason" else empty end),
+          (if $row.kind == "decision" and ($row.decisionRef | nonempty | not)
+             then "row \($id): decision rows must cite the origin decision (decisionRef)" else empty end),
+          (if $row.status == "green" and (($row.tests // []) | length) == 0
+             then "row \($id): green row has no tests" else empty end),
+          (if $row.status == "green" and ($row.lifecycle == true) and (($row.rcTx // []) | length) == 0
+             then "row \($id): lifecycle row is green without any RC transaction hash" else empty end),
+          (if $row.status == "green" and (($row.rcTx // []) | length) > 0 and $online == 0
+             then "row \($id): green row cites rcTx but no RPC verification ran (set ARUNA_LEDGER_RPC_URL, without --offline)"
+           else empty end),
+          ( ($row.tests // [])[] as $t
+            | if ($t | type) != "string" or ($t | test("^[^:]+\\.sol:[A-Za-z0-9_]+:[A-Za-z0-9_]+$") | not)
+                then "row \($id): bad test ref \($t | tojson) (want path:Contract:testName)"
+              elif $R[$t] == null then "row \($id): test not found: \($t)"
+              elif ($row.status == "green" or $row.status == "n-a") and $R[$t] != "Success"
+                then "row \($id): test did not pass (\($R[$t])): \($t)"
+              elif $row.status == "pending" and $R[$t] == "Failure"
+                then "row \($id): test fails: \($t)"
+              else empty end ),
+          ( ($row.rcTx // [])[] as $tx
+            | (if ($tx.hash | type) != "string" or ($tx.hash | test("^0x[0-9a-fA-F]{64}$") | not)
+                 then "row \($id): bad rcTx hash \($tx.hash | tojson)" else empty end),
+              (if ($tx.network | tostring | test("^[0-9]+$") | not)
+                 then "row \($id): rcTx network must be the decimal chain id (got \($tx.network | tojson))" else empty end),
+              (if ($tx.expectAddressIn | nonempty | not)
+                 then "row \($id): rcTx \($tx.hash) needs expectAddressIn (a manifest key)" else empty end) )
+      )
+    ] as $errors
+  | ( if any($rows[]; .status == "red") then "red"
+      elif any($rows[]; .status == "pending") then "pending"
+      else "green" end ) as $computed
+  | { errors: ($errors + (if .status != $computed
+                          then ["top: status is \(.status | tojson) but the rows make it \($computed | tojson)"]
+                          else [] end)),
+      computed: $computed,
+      rows: [ $rows[] | {id, status, tests: ((.tests // []) | length), rcTx: ((.rcTx // []) | length)} ] }
+' "$LEDGER" >"$TMP/report.json" || die "jq could not evaluate the ledger (malformed row?)"
+
+ERRORS_FILE="$TMP/errors.txt"
+jq -r '.errors[]' "$TMP/report.json" >"$ERRORS_FILE"
+
+# ---------------------------------------------------------------------------------------------
+# 3. rcTx: manifest resolution (always) and on-chain verification (online only).
+# ---------------------------------------------------------------------------------------------
+NTX="$(jq '[.rows[]?.rcTx[]?] | length' "$LEDGER")"
+VERIFIED=0
+if [ "$NTX" -gt 0 ]; then
+  MANIFEST="$(jq -r '.rcManifest // empty' "$LEDGER")"
+  if [ -z "$MANIFEST" ]; then
+    echo "top: rows cite rcTx but rcManifest is null" >>"$ERRORS_FILE"
+  elif [ ! -f "$MANIFEST" ]; then
+    echo "top: rcManifest not found: $MANIFEST" >>"$ERRORS_FILE"
+  elif ! jq -e 'type == "object"' "$MANIFEST" >/dev/null 2>&1; then
+    echo "top: rcManifest is not a JSON object: $MANIFEST" >>"$ERRORS_FILE"
+  else
+    MCHAIN="$(jq -r '.chainId // empty' "$MANIFEST")"
+    RPCCHAIN=""
+    if [ "$ONLINE" = 1 ]; then
+      command -v cast >/dev/null 2>&1 || die "cast is required for RPC verification"
+      RPCCHAIN="$(cast chain-id --rpc-url "$RPC_URL" 2>/dev/null || true)"
+      if [ -z "$RPCCHAIN" ]; then
+        echo "rpc: cannot read chain id from the RPC" >>"$ERRORS_FILE"
+      elif [ "$RPCCHAIN" != "$MCHAIN" ]; then
+        echo "rpc: RPC chain id $RPCCHAIN != manifest chainId $MCHAIN" >>"$ERRORS_FILE"
+      fi
+    fi
+    # one line per tx: id <TAB> network <TAB> hash <TAB> key <TAB> block
+    jq -r '.rows[] | .id as $id | (.rcTx // [])[]
+           | [$id, (.network | tostring), (.hash // ""), (.expectAddressIn // ""), ((.block // "") | tostring)]
+           | @tsv' "$LEDGER" >"$TMP/txs.tsv"
+    while IFS="$(printf '\t')" read -r id net hash key block; do
+      [ -n "$key" ] || continue
+      if [ "$net" != "$MCHAIN" ]; then
+        echo "row $id: rcTx $hash network $net != manifest chainId $MCHAIN" >>"$ERRORS_FILE"
+      fi
+      addrs="$(jq -r --arg k "$key" '
+        (try getpath($k | split(".")) catch null)
+        | if . == null then empty else (.. | strings | select(test("^0x[0-9a-fA-F]{40}$")) | ascii_downcase) end
+      ' "$MANIFEST")"
+      if [ -z "$addrs" ]; then
+        echo "row $id: manifest key \"$key\" holds no address in $MANIFEST" >>"$ERRORS_FILE"
+        continue
+      fi
+      [ "$ONLINE" = 1 ] || continue
+      if ! rc="$(cast receipt --rpc-url "$RPC_URL" --json "$hash" 2>/dev/null)" \
+         || ! printf '%s' "$rc" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        echo "row $id: no receipt for $hash" >>"$ERRORS_FILE"
+        continue
+      fi
+      st="$(printf '%s' "$rc" | jq -r '.status | tostring')"
+      to="$(printf '%s' "$rc" | jq -r '(.to // "") | ascii_downcase')"
+      created="$(printf '%s' "$rc" | jq -r '(.contractAddress // "") | ascii_downcase')"
+      bn="$(printf '%s' "$rc" | jq -r '(.blockNumber // "") | tostring')"
+      ok=1
+      case "$st" in 0x1|1|true) ;; *) echo "row $id: tx $hash failed (receipt status $st)" >>"$ERRORS_FILE"; ok=0 ;; esac
+      if [ -z "$bn" ] || [ "$bn" = "null" ]; then
+        echo "row $id: tx $hash has no block number (not mined)" >>"$ERRORS_FILE"; ok=0
+      else
+        case "$bn" in 0x*) bn=$((bn)) ;; esac
+        if [ -n "$block" ] && [ "$block" != "$bn" ]; then
+          echo "row $id: tx $hash mined in block $bn, ledger says $block" >>"$ERRORS_FILE"; ok=0
+        fi
+      fi
+      target="$to"
+      if [ -z "$target" ] || [ "$target" = "null" ]; then target="$created"; fi
+      if ! printf '%s\n' "$addrs" | grep -qx -- "$target"; then
+        echo "row $id: tx $hash targets ${target:-<none>}, not an address under manifest key \"$key\"" >>"$ERRORS_FILE"; ok=0
+      fi
+      [ "$ok" = 1 ] && VERIFIED=$((VERIFIED + 1))
+    done <"$TMP/txs.tsv"
+  fi
+fi
+
+# ---------------------------------------------------------------------------------------------
+# 4. Report
+# ---------------------------------------------------------------------------------------------
+mode="offline"; [ "$ONLINE" = 1 ] && mode="online"
+echo "check-ledger: $LEDGER ($mode)"
+jq -r '.rows | group_by(.status)[] | "  \(.[0].status): \(length) rows"' "$TMP/report.json"
+echo "  tests known: $(jq 'length' "$TMP/results.json"); rcTx cited: $NTX; verified on-chain: $VERIFIED"
+echo "  ledger status: $(jq -r '.status' "$LEDGER") (computed: $(jq -r '.computed' "$TMP/report.json"))"
+if [ "$mode" = offline ]; then
+  echo "  pending rows:"
+  jq -r '.rows[] | select(.status == "pending") | "    \(.id): \(.reason)"' "$LEDGER"
+fi
+if [ -s "$ERRORS_FILE" ]; then
+  n="$(wc -l <"$ERRORS_FILE" | tr -d ' ')"
+  echo "FAIL: $n violation(s):"
+  sed 's/^/  - /' "$ERRORS_FILE"
+  exit 1
+fi
+echo "OK"

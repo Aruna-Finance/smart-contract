@@ -53,3 +53,13 @@ jobs:
 
       - name: Run Forge tests
         run: forge test -vvv
+
+      # Conformance ledger (plan U10): every green row's tests exist and pass, required rows
+      # are present, reasons/decision refs are given, and the top-level status matches the
+      # rows. Offline: rows citing RC transactions cannot be green here (verified online
+      # with ARUNA_LEDGER_RPC_URL at release time, see conformance/README.md).
+      - name: Check conformance ledger
+        run: |
+          forge test --json 2>/dev/null | grep '^{' | tail -n 1 > "$RUNNER_TEMP/forge.json"
+          conformance/check-ledger --offline --forge-json "$RUNNER_TEMP/forge.json"
+          FORGE_JSON="$RUNNER_TEMP/forge.json" conformance/tests/test-check-ledger.sh
