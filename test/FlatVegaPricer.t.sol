@@ -109,7 +109,10 @@ contract FlatVegaPricerTest is Test {
         if (a > b) (a, b) = (b, a);
         // fixed strike > 0 so moneyness actually moves with ewma
         uint64 strike = uint64(WAD / 20);
-        assertLe(_q(2_000e6, strike, SEVEN_DAYS, a, 0, 10_000e6), _q(2_000e6, strike, SEVEN_DAYS, b, 0, 10_000e6));
+        assertLe(
+            _q(2_000e6, strike, SEVEN_DAYS, a, 0, 10_000e6),
+            _q(2_000e6, strike, SEVEN_DAYS, b, 0, 10_000e6)
+        );
     }
 
     function testFuzz_NonIncreasingIn_Strike(uint64 a, uint64 b) public view {
@@ -118,7 +121,10 @@ contract FlatVegaPricerTest is Test {
         if (a > b) (a, b) = (b, a);
         uint128 ewma = uint128((1225 * WAD) / 10_000);
         // higher strike (b) must be cheaper-or-equal than lower strike (a)
-        assertGe(_q(2_000e6, a, SEVEN_DAYS, ewma, 0, 10_000e6), _q(2_000e6, b, SEVEN_DAYS, ewma, 0, 10_000e6));
+        assertGe(
+            _q(2_000e6, a, SEVEN_DAYS, ewma, 0, 10_000e6),
+            _q(2_000e6, b, SEVEN_DAYS, ewma, 0, 10_000e6)
+        );
     }
 
     function testFuzz_NonDecreasingIn_Reserved(uint128 a, uint128 b) public view {
@@ -138,6 +144,9 @@ contract FlatVegaPricerTest is Test {
         if (a > b) (a, b) = (b, a); // a <= b
         uint128 ewma = uint128((1225 * WAD) / 10_000);
         // larger capital (b) dilutes utilization => cheaper-or-equal
-        assertGe(_q(2_000e6, 0, SEVEN_DAYS, ewma, reserved, a), _q(2_000e6, 0, SEVEN_DAYS, ewma, reserved, b));
+        assertGe(
+            _q(2_000e6, 0, SEVEN_DAYS, ewma, reserved, a),
+            _q(2_000e6, 0, SEVEN_DAYS, ewma, reserved, b)
+        );
     }
 }

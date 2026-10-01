@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 import {IVarianceAccumulator} from "./interfaces/IVarianceAccumulator.sol";
 import {IUniswapV3PoolMinimal} from "./interfaces/IUniswapV3PoolMinimal.sol";
@@ -83,7 +83,12 @@ contract VarianceAccumulator is IVarianceAccumulator {
         if (count == 0) {
             // Baseline sample: no previous tick, so no variance is accrued yet.
             _samples.push(
-                Sample({timestamp: nowTs, tickCumulative: currentTickCumulative, avgTick: avgTick, cumulativeSumSq: 0})
+                Sample({
+                    timestamp: nowTs,
+                    tickCumulative: currentTickCumulative,
+                    avgTick: avgTick,
+                    cumulativeSumSq: 0
+                })
             );
         } else {
             Sample memory prev = _samples[count - 1];
@@ -168,7 +173,11 @@ contract VarianceAccumulator is IVarianceAccumulator {
     ///      toward negative infinity to match Uniswap's OracleLibrary convention.
     /// @return avgTick The window TWAP tick.
     /// @return currentTickCumulative The pool's cumulative tick right now (for audit).
-    function _observe(uint32 window) internal view returns (int24 avgTick, int56 currentTickCumulative) {
+    function _observe(uint32 window)
+        internal
+        view
+        returns (int24 avgTick, int56 currentTickCumulative)
+    {
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = window;
         secondsAgos[1] = 0;

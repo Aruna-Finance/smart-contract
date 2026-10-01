@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 /// @title ICoverVault
 /// @notice The one contract that holds funds (design §2). One vault per (pool, tenor)
@@ -48,7 +48,12 @@ interface ICoverVault {
 
     event Deposited(uint32 indexed cohortId, address indexed underwriter, uint128 amount);
     event Withdrawn(uint32 indexed cohortId, address indexed underwriter, uint256 net);
-    event Rolled(uint32 indexed fromCohort, uint32 indexed toCohort, address indexed underwriter, uint128 amount);
+    event Rolled(
+        uint32 indexed fromCohort,
+        uint32 indexed toCohort,
+        address indexed underwriter,
+        uint128 amount
+    );
     event CoverBought(
         uint256 indexed policyId,
         uint32 indexed cohortId,

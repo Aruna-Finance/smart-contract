@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 /// @title IPositionValuer
 /// @notice Derives `varNotional` from a Uniswap v3 position's gamma exposure —

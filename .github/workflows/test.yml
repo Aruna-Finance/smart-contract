@@ -28,8 +28,28 @@ jobs:
       - name: Run Forge fmt
         run: forge fmt --check
 
-      - name: Run Forge build
-        run: forge build --sizes
+      # Contract-size gate (EIP-170 runtime 24,576 B / EIP-3860 initcode 49,152 B).
+      # `forge build --sizes` prints the size table and exits non-zero when any deployable
+      # contract (src/, test mocks, script helpers; Test/Script contracts excluded) exceeds
+      # a limit. The jq pass below re-checks src/ runtime sizes independently so the gate
+      # does not silently depend on forge's exit-code behaviour.
+      - name: Run Forge build (contract size gate)
+        run: |
+          forge build --sizes
+          fail=0
+          for f in $(find src -name "*.sol"); do
+            n=$(basename "$f" .sol)
+            j="out/$n.sol/$n.json"
+            [ -f "$j" ] || continue
+            hex=$(jq -r '.deployedBytecode.object' "$j")
+            size=$(( (${#hex} - 2) / 2 ))
+            echo "$n runtime=$size B"
+            if [ "$size" -gt 24576 ]; then
+              echo "::error file=$f::$n runtime size $size B exceeds EIP-170 limit 24576 B"
+              fail=1
+            fi
+          done
+          exit $fail
 
       - name: Run Forge tests
         run: forge test -vvv

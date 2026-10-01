@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 import {VarianceAccumulator} from "./VarianceAccumulator.sol";
 import {CoverVault} from "./CoverVault.sol";
@@ -59,7 +59,9 @@ contract ArunaFactory {
     error VaultExists(address pool, uint32 tenor, address existing);
 
     event AccumulatorCreated(address indexed pool, address accumulator);
-    event VaultCreated(address indexed pool, uint32 indexed tenor, address vault, address accumulator);
+    event VaultCreated(
+        address indexed pool, uint32 indexed tenor, address vault, address accumulator
+    );
 
     /// @param positionManager_ Uniswap v3 NFPM address (chain infrastructure).
     /// @param settlementToken_ Settlement token address (chain infrastructure).
@@ -74,7 +76,9 @@ contract ArunaFactory {
     /// @return vault The newly deployed CoverVault. Deep parameter validation is left to
     ///         the vault's own constructor, which is the single source of that truth.
     function createVault(VaultParams calldata p) external returns (address vault) {
-        if (p.pool == address(0) || p.tenor == 0 || p.pricer == address(0) || p.valuer == address(0)) {
+        if (
+            p.pool == address(0) || p.tenor == 0 || p.pricer == address(0) || p.valuer == address(0)
+        ) {
             revert BadConfig();
         }
         address existing = vaultOf[p.pool][p.tenor];

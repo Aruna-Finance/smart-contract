@@ -23,7 +23,10 @@ contract MockUniswapV3Pool is IUniswapV3PoolMinimal {
     function observe(uint32[] calldata secondsAgos)
         external
         view
-        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
+        returns (
+            int56[] memory tickCumulatives,
+            uint160[] memory secondsPerLiquidityCumulativeX128s
+        )
     {
         tickCumulatives = new int56[](secondsAgos.length);
         secondsPerLiquidityCumulativeX128s = new uint160[](secondsAgos.length);
@@ -44,11 +47,7 @@ contract MockUniswapV3Pool is IUniswapV3PoolMinimal {
 
     // --- unused surface, present to satisfy the interface ---
 
-    function slot0()
-        external
-        pure
-        returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
-    {
+    function slot0() external pure returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
         return (0, 0, 0, 0, 0, 0, true);
     }
 

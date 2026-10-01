@@ -113,7 +113,11 @@ contract DeployMarket is Script {
 
         vm.startBroadcast();
         pricer = address(new FlatVegaPricer(minPremium, loadBps, lambda, mKnots, gKnots));
-        valuer = address(new PositionValuer(factory.positionManager(), kappa, refWidth, minWidthMult, maxWidthMult));
+        valuer = address(
+            new PositionValuer(
+                factory.positionManager(), kappa, refWidth, minWidthMult, maxWidthMult
+            )
+        );
         p.pricer = pricer;
         p.valuer = valuer;
         vault = factory.createVault(p);

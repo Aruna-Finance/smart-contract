@@ -161,7 +161,9 @@ contract CoverVaultHandler is Test {
         pm.setOwner(tokenId, a);
 
         vm.prank(a);
-        try vault.buyCover(cid, tokenId, strike, premium, uint64(vm.getBlockTimestamp() + 1)) returns (
+        try vault.buyCover(
+            cid, tokenId, strike, premium, uint64(vm.getBlockTimestamp() + 1)
+        ) returns (
             uint256 pid
         ) {
             ghostIn += premium;
@@ -500,13 +502,21 @@ contract CoverVaultInvariants is Test {
         // Expire, finalize (-> SETTLING), settle the single policy.
         vm.warp(endsAt);
         vault.finalize(cid);
-        assertEq(uint256(vault.statusOf(cid)), uint256(ICoverVault.Status.SETTLING), "SETTLING after finalize");
+        assertEq(
+            uint256(vault.statusOf(cid)),
+            uint256(ICoverVault.Status.SETTLING),
+            "SETTLING after finalize"
+        );
         vault.settleBatch(cid, 1);
 
         // payout = varNotional * (5e17 - 0) / WAD = 1000 * 5e17 / 1e18 = 500.
         assertEq(token.balanceOf(BUYER), 500, "buyer received 500 payout");
         assertEq(uint256(vault.cohort(cid).claimsPaid), 500, "claimsPaid == 500");
-        assertEq(uint256(vault.statusOf(cid)), uint256(ICoverVault.Status.SETTLED), "SETTLED after last batch");
+        assertEq(
+            uint256(vault.statusOf(cid)),
+            uint256(ICoverVault.Status.SETTLED),
+            "SETTLED after last batch"
+        );
         assertEq(uint256(vault.cohort(cid).reserved), 0, "reserved released to 0");
 
         // Underwriter net = 10000 + premiumShare(100) - claimShare(500) = 9600.

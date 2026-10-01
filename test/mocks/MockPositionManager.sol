@@ -30,7 +30,9 @@ contract MockPositionManager is INonfungiblePositionManager {
     }
 
     /// @notice Set the geometry the PositionValuer reads (liquidity + range).
-    function setPosition(uint256 tokenId, int24 tickLower, int24 tickUpper, uint128 liquidity) external {
+    function setPosition(uint256 tokenId, int24 tickLower, int24 tickUpper, uint128 liquidity)
+        external
+    {
         posOf[tokenId] = Pos(tickLower, tickUpper, liquidity);
     }
 
@@ -41,7 +43,20 @@ contract MockPositionManager is INonfungiblePositionManager {
     function positions(uint256 tokenId)
         external
         view
-        returns (uint96, address, address, address, uint24, int24, int24, uint128, uint256, uint256, uint128, uint128)
+        returns (
+            uint96,
+            address,
+            address,
+            address,
+            uint24,
+            int24,
+            int24,
+            uint128,
+            uint256,
+            uint256,
+            uint128,
+            uint128
+        )
     {
         Pos memory p = posOf[tokenId];
         return (0, address(0), t0, t1, f, p.tickLower, p.tickUpper, p.liquidity, 0, 0, 0, 0);

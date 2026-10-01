@@ -41,7 +41,9 @@ contract PositionValuerTest is Test {
     ///         so varNotional == liquidity exactly.
     function test_ExactAnchor_NeutralWidth() public {
         _set(-1_000, 1_000, 2_000_000); // width 2000 == REF_WIDTH
-        assertEq(valuer.varNotionalFor(TOKEN_ID), 2_000_000, "neutral width => varNotional == liquidity");
+        assertEq(
+            valuer.varNotionalFor(TOKEN_ID), 2_000_000, "neutral width => varNotional == liquidity"
+        );
     }
 
     function test_ZeroLiquidity_ReturnsZero() public {
@@ -71,7 +73,9 @@ contract PositionValuerTest is Test {
 
     function test_InvalidRange_Reverts() public {
         _set(1_000, 1_000, 1_000_000); // upper == lower
-        vm.expectRevert(abi.encodeWithSelector(PositionValuer.InvalidRange.selector, int24(1_000), int24(1_000)));
+        vm.expectRevert(
+            abi.encodeWithSelector(PositionValuer.InvalidRange.selector, int24(1_000), int24(1_000))
+        );
         valuer.varNotionalFor(TOKEN_ID);
     }
 

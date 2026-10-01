@@ -16,10 +16,18 @@ contract MockAccumulator is IVarianceAccumulator {
 
     /// @notice Append a sample. cumulativeSumSq must not decrease (I5).
     function push(uint32 timestamp, uint128 cumulativeSumSq) external {
-        if (_samples.length != 0 && cumulativeSumSq < _samples[_samples.length - 1].cumulativeSumSq) {
+        if (_samples.length != 0 && cumulativeSumSq < _samples[_samples.length - 1].cumulativeSumSq)
+        {
             revert NonMonotonic();
         }
-        _samples.push(Sample({timestamp: timestamp, tickCumulative: int56(0), avgTick: int24(0), cumulativeSumSq: cumulativeSumSq}));
+        _samples.push(
+            Sample({
+                timestamp: timestamp,
+                tickCumulative: int56(0),
+                avgTick: int24(0),
+                cumulativeSumSq: cumulativeSumSq
+            })
+        );
     }
 
     function poke() external {}

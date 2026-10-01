@@ -59,12 +59,18 @@ contract ArunaFactoryTest is Test {
 
         assertTrue(vault != address(0), "vault deployed");
         assertEq(factory.vaultOf(address(pool), TENOR_7D), vault, "registry: vault by (pool,tenor)");
-        assertTrue(factory.accumulatorOf(address(pool)) != address(0), "registry: accumulator by pool");
+        assertTrue(
+            factory.accumulatorOf(address(pool)) != address(0), "registry: accumulator by pool"
+        );
         assertEq(factory.allVaultsLength(), 1, "one vault total");
 
         // Wired to exactly what the factory holds/recorded.
         CoverVault cv = CoverVault(vault);
-        assertEq(address(cv.accumulator()), factory.accumulatorOf(address(pool)), "vault uses pool accumulator");
+        assertEq(
+            address(cv.accumulator()),
+            factory.accumulatorOf(address(pool)),
+            "vault uses pool accumulator"
+        );
         assertEq(address(cv.pricer()), address(pricer), "vault pricer");
         assertEq(address(cv.valuer()), address(valuer), "vault valuer");
         assertEq(address(cv.positionManager()), address(pm), "vault position manager");

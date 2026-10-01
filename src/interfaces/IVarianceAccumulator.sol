@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 /// @title IVarianceAccumulator
 /// @notice One accumulator per pool, shared across all tenors (SSOT §4.6, design §5.2).

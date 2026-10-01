@@ -1,66 +1,56 @@
-## Foundry
+# Aruna — smart contracts (v2)
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+Aruna sells realized-variance cover to Uniswap v3 LPs on Arbitrum. Underwriters fund a
+per-(pool, tenor) vault; LPs buy cover for a cohort; at cohort end the realized variance
+measured on-chain is settled against the strike. Design SSOT:
+`context/aruna - desain smart contract.md` (sections cited as `§x.y` in NatSpec).
 
-Foundry consists of:
+No admin role, no pause, no proxy: every contract is immutable once deployed.
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+## Contracts (`src/`)
 
-## Documentation
+| Contract | Role |
+|---|---|
+| `ArunaFactory` | Permissionless factory: deploys one `CoverVault` + `VarianceAccumulator` per (pool, tenor). In v2 the creation code moves to separate deployers (`src/deployers/`) and the time parameters (tenor set, gap, sample interval) become factory constructor immutables. |
+| `CoverVault` | Underwriter capital, cohort calendar, cover sales, escrow of the LP position NFT, settlement. |
+| `VarianceAccumulator` | Samples the pool TWAP and accumulates squared log returns (§3.2). Never blocks a vault action. |
+| `FlatVegaPricer` | `IPremiumPricer` — premium from moneyness knots and utilization (§6.3). Deployed outside the factory. |
+| `PositionValuer` | `IPositionValuer` — variance notional of an LP position (§8.4). Deployed outside the factory. |
+| `libraries/Math` | Explicit-rounding `mulDivUp` / `mulDivDown` helpers. |
+| `interfaces/` | Minimal local interfaces (ERC20, NFPM, pool, and the Aruna modules). |
 
-https://book.getfoundry.sh/
+## Tests (`test/`)
 
-## Usage
+- `*.t.sol` — unit tests per contract.
+- `CoverVaultInvariants.t.sol` — handler-based invariant suite (§9.1), configured under
+  `[invariant]` in `foundry.toml`.
+- `mocks/` — NFPM, pool, accumulator, ERC20, pricer and valuer mocks.
+- Optional fork tests: `FOUNDRY_PROFILE=fork forge test` with `ARBITRUM_RPC_URL` set. The
+  default profile never needs an RPC.
 
-### Build
+## Scripts (`script/`)
 
-```shell
-$ forge build
-```
+- `Deploy.s.sol` — `DeployFactory` (chain infra) and `DeployMarket` (per-market calibration
+  + `createVault`). Inputs come from the environment; see `.env.example`.
+- `Testnet.s.sol` — Arbitrum Sepolia setup: mock tokens, a real Uniswap v3 pool, and seed
+  swaps.
 
-### Test
-
-```shell
-$ forge test
-```
-
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
+## Build
 
 ```shell
-$ anvil
+forge build --sizes   # fails if any contract exceeds EIP-170 (24,576 B runtime)
+forge test
+forge fmt --check
 ```
 
-### Deploy
+Builds are reproducible: solc is pinned to `0.8.26` and the metadata hash / CBOR trailer
+are disabled (`bytecode_hash = "none"`, `cbor_metadata = false`), so two clean builds of
+the same commit produce identical runtime code and init code hashes. CI
+(`.github/workflows/test.yml`) runs the format check, the size gate and the full suite.
 
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
+## Release evidence (forthcoming)
 
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+- `deployments/` — deployment manifest per network (addresses, init code hashes, time and
+  calibration parameters). *Added in plan unit U9.*
+- `conformance/` — conformance ledger mapping each requirement / acceptance example to its
+  proving test and on-chain transaction, plus a checker run in CI. *Added in plan unit U10.*

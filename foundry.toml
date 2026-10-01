@@ -2,15 +2,39 @@
 src = "src"
 out = "out"
 libs = ["lib"]
-solc = "0.8.24"
+# Pinned compiler (v2 release, plan U1): every build, local or CI, uses exactly this solc
+# so the deployed bytecode can be reproduced from source.
+solc = "0.8.26"
 optimizer = true
 optimizer_runs = 200
 evm_version = "cancun"
 via_ir = true
+# Reproducible bytecode: no metadata hash and no CBOR trailer, so the runtime code and the
+# init code hash depend only on source + compiler settings (not on paths or comments).
+bytecode_hash = "none"
+cbor_metadata = false
 
 remappings = [
     "forge-std/=lib/forge-std/src/",
 ]
+
+# Scripts write the deployment manifest under ./deployments (U9) and read the conformance
+# vectors (U10) and build artifacts. Nothing else on disk is reachable from cheatcodes.
+fs_permissions = [
+    { access = "read-write", path = "./deployments" },
+    { access = "read", path = "./conformance" },
+    { access = "read", path = "./out" },
+]
+
+# Optional fork profile: `FOUNDRY_PROFILE=fork forge test` runs against a live Arbitrum
+# fork. The RPC comes only from the environment; when ARBITRUM_RPC_URL is unset the default
+# profile still builds and tests offline (the endpoint is resolved only when used).
+[profile.fork]
+eth_rpc_url = "${ARBITRUM_RPC_URL}"
+
+[rpc_endpoints]
+arbitrum = "${ARBITRUM_RPC_URL}"
+arbitrum_sepolia = "${ARBITRUM_SEPOLIA_RPC_URL}"
 
 # Invariant suite (design §9.1). fail_on_revert = false: the handler guards its own
 # preconditions and swallows the residual races, so a discarded call is expected and

@@ -13,7 +13,11 @@ contract MockPricer is IPremiumPricer {
         premium = premium_;
     }
 
-    function quote(uint128, uint64, uint32, uint128, uint128, uint128) external view returns (uint128) {
+    function quote(uint128, uint64, uint32, uint128, uint128, uint128)
+        external
+        view
+        returns (uint128)
+    {
         return premium;
     }
 }

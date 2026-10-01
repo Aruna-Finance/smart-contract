@@ -97,10 +97,12 @@ contract TestToken {
 /// @dev The slices of Uniswap v3 periphery/core this script calls. Declared locally to
 ///      avoid pulling the full periphery (which pins solc 0.7.6).
 interface INfpmSetup {
-    function createAndInitializePoolIfNecessary(address token0, address token1, uint24 fee, uint160 sqrtPriceX96)
-        external
-        payable
-        returns (address pool);
+    function createAndInitializePoolIfNecessary(
+        address token0,
+        address token1,
+        uint24 fee,
+        uint160 sqrtPriceX96
+    ) external payable returns (address pool);
 
     struct MintParams {
         address token0;
@@ -142,7 +144,10 @@ interface ISwapRouter02 {
         uint160 sqrtPriceLimitX96;
     }
 
-    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
+    function exactInputSingle(ExactInputSingleParams calldata params)
+        external
+        payable
+        returns (uint256 amountOut);
 }
 
 /// @notice Deploy tokens + real v3 pool + liquidity. Prints the addresses .env needs.
@@ -172,9 +177,11 @@ contract SetupTestnet is Script {
         usdc.mint(deployer, mintAmt);
 
         // 2) Real v3 pool. Uniswap requires token0 < token1; sort before initializing.
-        (address token0, address token1) =
-            address(weth) < address(usdc) ? (address(weth), address(usdc)) : (address(usdc), address(weth));
-        address pool = INfpmSetup(nfpm).createAndInitializePoolIfNecessary(token0, token1, fee, SQRT_PRICE_1_1);
+        (address token0, address token1) = address(weth) < address(usdc)
+            ? (address(weth), address(usdc))
+            : (address(usdc), address(weth));
+        address pool = INfpmSetup(nfpm)
+            .createAndInitializePoolIfNecessary(token0, token1, fee, SQRT_PRICE_1_1);
 
         // 3) Grow observation ring so the accumulator's TWAP window has history to read.
         IUniV3PoolSetup(pool).increaseObservationCardinalityNext(cardinality);
@@ -185,21 +192,22 @@ contract SetupTestnet is Script {
         int24 maxUsable = (MAX_TICK / spacing) * spacing;
         TestToken(token0).approve(nfpm, type(uint256).max);
         TestToken(token1).approve(nfpm, type(uint256).max);
-        (uint256 tokenId, uint128 liquidity,,) = INfpmSetup(nfpm).mint(
-            INfpmSetup.MintParams({
-                token0: token0,
-                token1: token1,
-                fee: fee,
-                tickLower: -maxUsable,
-                tickUpper: maxUsable,
-                amount0Desired: mintAmt / 2,
-                amount1Desired: mintAmt / 2,
-                amount0Min: 0,
-                amount1Min: 0,
-                recipient: deployer,
-                deadline: block.timestamp + 3600
-            })
-        );
+        (uint256 tokenId, uint128 liquidity,,) = INfpmSetup(nfpm)
+            .mint(
+                INfpmSetup.MintParams({
+                    token0: token0,
+                    token1: token1,
+                    fee: fee,
+                    tickLower: -maxUsable,
+                    tickUpper: maxUsable,
+                    amount0Desired: mintAmt / 2,
+                    amount1Desired: mintAmt / 2,
+                    amount0Min: 0,
+                    amount1Min: 0,
+                    recipient: deployer,
+                    deadline: block.timestamp + 3600
+                })
+            );
 
         vm.stopBroadcast();
 
@@ -239,17 +247,18 @@ contract SeedSwaps is Script {
         vm.startBroadcast();
         TestToken(tokenIn).mint(msg.sender, amountIn); // testnet mint so we always have input
         TestToken(tokenIn).approve(router, amountIn);
-        uint256 out = ISwapRouter02(router).exactInputSingle(
-            ISwapRouter02.ExactInputSingleParams({
-                tokenIn: tokenIn,
-                tokenOut: tokenOut,
-                fee: fee,
-                recipient: msg.sender,
-                amountIn: amountIn,
-                amountOutMinimum: 0,
-                sqrtPriceLimitX96: 0
-            })
-        );
+        uint256 out = ISwapRouter02(router)
+            .exactInputSingle(
+                ISwapRouter02.ExactInputSingleParams({
+                    tokenIn: tokenIn,
+                    tokenOut: tokenOut,
+                    fee: fee,
+                    recipient: msg.sender,
+                    amountIn: amountIn,
+                    amountOutMinimum: 0,
+                    sqrtPriceLimitX96: 0
+                })
+            );
         vm.stopBroadcast();
 
         console2.log("swapped in:", amountIn);

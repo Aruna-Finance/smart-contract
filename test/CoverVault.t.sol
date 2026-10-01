@@ -104,7 +104,8 @@ contract CoverVaultTest is Test {
         pricer.setPremium(200e6);
 
         vm.prank(lp);
-        uint256 policyId = vault.buyCover(COHORT, TOKEN_ID, uint64(0), 200e6, uint64(block.timestamp + 1));
+        uint256 policyId =
+            vault.buyCover(COHORT, TOKEN_ID, uint64(0), 200e6, uint64(block.timestamp + 1));
 
         ICoverVault.Policy memory p = vault.policy(policyId);
         assertEq(p.owner, lp, "policy owner");
@@ -166,7 +167,11 @@ contract CoverVaultTest is Test {
         valuer.setVarNotional(9_000e6);
         pricer.setPremium(1e6);
         vm.prank(lp);
-        vm.expectRevert(abi.encodeWithSelector(CoverVault.CapacityExceeded.selector, uint128(9_000e6), uint128(8_000e6)));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CoverVault.CapacityExceeded.selector, uint128(9_000e6), uint128(8_000e6)
+            )
+        );
         vault.buyCover(COHORT, TOKEN_ID, uint64(0), type(uint128).max, uint64(block.timestamp + 1));
     }
 
@@ -175,7 +180,11 @@ contract CoverVaultTest is Test {
         valuer.setVarNotional(2_000e6);
         pricer.setPremium(300e6);
         vm.prank(lp);
-        vm.expectRevert(abi.encodeWithSelector(CoverVault.PremiumTooHigh.selector, uint128(300e6), uint128(200e6)));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CoverVault.PremiumTooHigh.selector, uint128(300e6), uint128(200e6)
+            )
+        );
         vault.buyCover(COHORT, TOKEN_ID, uint64(0), 200e6, uint64(block.timestamp + 1));
     }
 
@@ -201,7 +210,9 @@ contract CoverVaultTest is Test {
 
         vm.warp(C1_END + 1);
         vault.finalize(COHORT);
-        assertEq(uint8(vault.statusOf(COHORT)), uint8(ICoverVault.Status.SETTLED), "no-policy => settled");
+        assertEq(
+            uint8(vault.statusOf(COHORT)), uint8(ICoverVault.Status.SETTLED), "no-policy => settled"
+        );
 
         vm.prank(uw1);
         uint256 net = vault.withdraw(COHORT);

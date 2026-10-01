@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 /// @title INonfungiblePositionManager
 /// @notice The slice of Uniswap v3's position NFT manager Aruna reads. `buyCover`

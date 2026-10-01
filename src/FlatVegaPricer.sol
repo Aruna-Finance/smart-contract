@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 import {IPremiumPricer} from "./interfaces/IPremiumPricer.sol";
 import {Math} from "./libraries/Math.sol";
@@ -69,7 +69,8 @@ contract FlatVegaPricer is IPremiumPricer {
     ) {
         if (loadBps_ > MAX_LOAD_BPS) revert BadConfig();
         // m strictly increasing.
-        if (!(mKnots[0] < mKnots[1] && mKnots[1] < mKnots[2] && mKnots[2] < mKnots[3] && mKnots[3] < mKnots[4])) {
+        if (!(mKnots[0] < mKnots[1] && mKnots[1] < mKnots[2] && mKnots[2] < mKnots[3]
+                    && mKnots[3] < mKnots[4])) {
             revert BadConfig();
         }
         // g non-increasing and each a valid WAD fraction ≤ 1.

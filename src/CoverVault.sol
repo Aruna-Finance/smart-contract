@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.26;
 
 import {ICoverVault} from "./interfaces/ICoverVault.sol";
 import {IVarianceAccumulator} from "./interfaces/IVarianceAccumulator.sol";
@@ -109,9 +109,10 @@ contract CoverVault is ICoverVault {
         uint128 seedVariance_
     ) {
         if (
-            pool_ == address(0) || accumulator_ == address(0) || pricer_ == address(0) || valuer_ == address(0)
-                || positionManager_ == address(0) || settlementToken_ == address(0) || tenor_ == 0
-                || maxUtilizationBps_ == 0 || maxUtilizationBps_ > BPS || maxExcessVariance_ == 0 || ewmaAlphaBps_ > BPS
+            pool_ == address(0) || accumulator_ == address(0) || pricer_ == address(0)
+                || valuer_ == address(0) || positionManager_ == address(0)
+                || settlementToken_ == address(0) || tenor_ == 0 || maxUtilizationBps_ == 0
+                || maxUtilizationBps_ > BPS || maxExcessVariance_ == 0 || ewmaAlphaBps_ > BPS
         ) revert BadConfig();
 
         pool = IUniswapV3PoolMinimal(pool_);
@@ -220,13 +221,17 @@ contract CoverVault is ICoverVault {
         if (block.timestamp > deadline) revert QuoteExpired(deadline);
 
         Cohort storage c = _cohorts[cohortId];
-        if (_effectiveStatus(c) != Status.ACTIVE || block.timestamp >= c.endsAt) revert NotActive(cohortId);
+        if (_effectiveStatus(c) != Status.ACTIVE || block.timestamp >= c.endsAt) {
+            revert NotActive(cohortId);
+        }
 
         // Position-attached: prove ownership NOW and that the position is this pool's.
         // A speculator with no position cannot buy; an LP cannot cover someone else's
         // position (design §8.2, invariant I8). Ownership is a precondition at buy,
         // not a standing invariant — the NFT may be sold afterward.
-        if (positionManager.ownerOf(positionTokenId) != msg.sender) revert PositionNotOwned(positionTokenId);
+        if (positionManager.ownerOf(positionTokenId) != msg.sender) {
+            revert PositionNotOwned(positionTokenId);
+        }
         _requirePositionMatchesPool(positionTokenId);
 
         uint32 sampleCount = accumulator.sampleCount();
@@ -244,8 +249,9 @@ contract CoverVault is ICoverVault {
         uint128 wouldReserve = c.reserved + maxPayout;
         if (wouldReserve > available) revert CapacityExceeded(wouldReserve, available);
 
-        uint128 premium =
-            pricer.quote(varNotional, strikeAnnualized, coveredSeconds, ewmaVariance, c.reserved, c.totalCapital);
+        uint128 premium = pricer.quote(
+            varNotional, strikeAnnualized, coveredSeconds, ewmaVariance, c.reserved, c.totalCapital
+        );
         if (premium > maxPremium) revert PremiumTooHigh(premium, maxPremium);
 
         // Per-policy window is exact (§6.2): record the cumulative sum-of-squares at
@@ -291,7 +297,9 @@ contract CoverVault is ICoverVault {
     function finalize(uint32 cohortId) external {
         Cohort storage c = _cohorts[cohortId];
         if (block.timestamp < c.endsAt || c.endsAt == 0) revert NotExpiredYet(cohortId);
-        if (c.status == Status.SETTLING || c.status == Status.SETTLED) revert AlreadyFinalized(cohortId);
+        if (c.status == Status.SETTLING || c.status == Status.SETTLED) {
+            revert AlreadyFinalized(cohortId);
+        }
 
         // endIndex is the last sample at/before endsAt; a late finalize adds no
         // variance (§7.5). startIndex brackets the cohort window for the EWMA update.
@@ -400,7 +408,11 @@ contract CoverVault is ICoverVault {
     /// @dev Underwriter net for a cohort (§7.4). O(1), no iteration over policies.
     ///      Premium share rounds DOWN, claim share rounds UP (§9.2); the difference
     ///      is dust that stays in the vault as residual, never negative net.
-    function _accountFor(uint32 cohortId, address u, Cohort storage c, Status s) internal view returns (uint256) {
+    function _accountFor(uint32 cohortId, address u, Cohort storage c, Status s)
+        internal
+        view
+        returns (uint256)
+    {
         uint128 dep = deposits[cohortId][u];
         if (dep == 0) return 0;
         if (s == Status.FUNDING) return dep; // capital never went at risk
@@ -420,7 +432,8 @@ contract CoverVault is ICoverVault {
     function _updateEwma(uint128 cohortSumSq) internal {
         uint256 annualized = uint256(cohortSumSq).mulDivDown(SECONDS_PER_YEAR, tenor);
         uint256 alpha = ewmaAlphaBps;
-        uint256 blended = uint256(ewmaVariance).mulDivDown(BPS - alpha, BPS) + annualized.mulDivDown(alpha, BPS);
+        uint256 blended =
+            uint256(ewmaVariance).mulDivDown(BPS - alpha, BPS) + annualized.mulDivDown(alpha, BPS);
         ewmaVariance = uint128(blended);
     }
 
@@ -433,7 +446,8 @@ contract CoverVault is ICoverVault {
 
         // strikeAccumulated = strikeAnnualized × coveredSeconds / SECONDS_PER_YEAR,
         // rounded UP so the threshold is a touch harder to cross (§9.2).
-        uint256 strikeAccumulated = uint256(p.strikeAnnualized).mulDivUp(p.coveredSeconds, SECONDS_PER_YEAR);
+        uint256 strikeAccumulated =
+            uint256(p.strikeAnnualized).mulDivUp(p.coveredSeconds, SECONDS_PER_YEAR);
 
         if (sumSqCovered <= strikeAccumulated) return 0;
         uint256 excess = sumSqCovered - strikeAccumulated;
@@ -484,7 +498,9 @@ contract CoverVault is ICoverVault {
 
     function _requirePositionMatchesPool(uint256 positionTokenId) internal view {
         (,, address t0, address t1, uint24 f,,,,,,,) = positionManager.positions(positionTokenId);
-        if (t0 != poolToken0 || t1 != poolToken1 || f != poolFee) revert PositionWrongPool(positionTokenId);
+        if (t0 != poolToken0 || t1 != poolToken1 || f != poolFee) {
+            revert PositionWrongPool(positionTokenId);
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -494,17 +510,16 @@ contract CoverVault is ICoverVault {
     /// @dev Pull `amount` from `from` into the vault (deposits, premiums). Handles
     ///      tokens that return no data (USDT-style) as well as bool-returning ones.
     function _pull(address from, uint256 amount) internal {
-        (bool ok, bytes memory data) = address(settlementToken).call(
-            abi.encodeWithSelector(IERC20.transferFrom.selector, from, address(this), amount)
-        );
+        (bool ok, bytes memory data) = address(settlementToken)
+            .call(abi.encodeWithSelector(IERC20.transferFrom.selector, from, address(this), amount));
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
     /// @dev Push `amount` to `to` for obligations we already accounted (underwriter
     ///      withdraw, unclaimed pull). Full gas: these are trusted, non-batch paths.
     function _push(address to, uint256 amount) internal {
-        (bool ok, bytes memory data) =
-            address(settlementToken).call(abi.encodeWithSelector(IERC20.transfer.selector, to, amount));
+        (bool ok, bytes memory data) = address(settlementToken)
+            .call(abi.encodeWithSelector(IERC20.transfer.selector, to, amount));
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
