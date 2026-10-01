@@ -20,15 +20,17 @@ import {MockAccumulator} from "./mocks/MockAccumulator.sol";
 contract CoverVaultTest is Test {
     uint256 internal constant WAD = 1e18;
     uint32 internal constant TENOR = 604_800; // 7 days
+    uint32 internal constant GAP = 86_400; // 1 day settlement gap
+    uint32 internal constant SAMPLE_INTERVAL = 1_800; // 30 min
     uint64 internal constant ANCHOR = 2_000_000;
     uint16 internal constant UTIL_BPS = 8_000;
     uint128 internal constant MAX_EXCESS = uint128(WAD); // maxPayout = varNotional * 1
     uint16 internal constant ALPHA_BPS = 2_000;
     uint128 internal constant SEED_VAR = uint128(WAD / 10);
 
-    // cohort 1 window
-    uint64 internal constant C1_START = ANCHOR + TENOR; // 2_604_800
-    uint64 internal constant C1_END = ANCHOR + 2 * TENOR; // 3_209_600
+    // cohort 1 window: startsAt(1) = anchor + (tenor + gap), endsAt(1) = startsAt(1) + tenor
+    uint64 internal constant C1_START = ANCHOR + TENOR + GAP; // 2_691_200
+    uint64 internal constant C1_END = C1_START + TENOR; // 3_296_000
     uint32 internal constant COHORT = 1;
     uint256 internal constant TOKEN_ID = 42;
 
@@ -53,6 +55,7 @@ contract CoverVaultTest is Test {
         pricer = new MockPricer();
         valuer = new MockValuer();
         acc = new MockAccumulator();
+        acc.setSampleInterval(SAMPLE_INTERVAL); // the vault reads it at deploy
 
         vault = new CoverVault(
             address(pool),
@@ -62,6 +65,7 @@ contract CoverVaultTest is Test {
             address(pm),
             address(token),
             TENOR,
+            GAP,
             ANCHOR,
             UTIL_BPS,
             MAX_EXCESS,

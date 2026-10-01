@@ -9,9 +9,16 @@ pragma solidity ^0.8.26;
 ///         reads variance from the accumulator and premiums from the pricer.
 interface ICoverVault {
     /// @dev Design §8.2 (B1: this enum is authoritative; §4.1's EXPIRED is folded away).
-    ///      FUNDING: deposits/withdrawals open, no selling. ACTIVE: selling open,
-    ///      capital locked. SETTLING: finalize() done, payouts being pushed.
-    ///      SETTLED: all claims paid, underwriters may withdraw.
+    ///      v2 (plan "Kalender dan status", R7): the status is DERIVED from the calendar
+    ///      plus one stored "resolved" mark, so a cohort nobody ever touched still reads
+    ///      the right value by time:
+    ///        FUNDING  — now < startsAt: deposits/withdrawals open, no selling.
+    ///        ACTIVE   — startsAt ≤ now < endsAt: selling open, capital locked.
+    ///        SETTLING — now ≥ endsAt and the cohort is capitalized but not yet resolved
+    ///                   (finalize pending, or policies still to settle).
+    ///        SETTLED  — resolved: finalized with every policy settled, or a cohort that
+    ///                   never held capital, which is SETTLED as soon as endsAt passes
+    ///                   (no finalize, no EWMA update).
     enum Status {
         FUNDING,
         ACTIVE,
@@ -19,18 +26,31 @@ interface ICoverVault {
         SETTLED
     }
 
+    /// @dev `startsAt`, `endsAt` and `status` are filled by the `cohort()` view from the
+    ///      calendar (they are not read from storage). Storage packing (slots):
+    ///        0: startsAt | endsAt | totalCapital
+    ///        1: reserved | premiumsCollected
+    ///        2: claimsPaid | startIndex | endIndex | policyCount | settledCount
+    ///        3: status | finalized | degraded | snapshotTaken | remainingPrincipal
+    ///        4: paidOut | varianceSnapshot
     struct Cohort {
         uint64 startsAt;
         uint64 endsAt;
-        uint128 totalCapital;
+        uint128 totalCapital; // capital at risk; frozen once ACTIVE (share denominator)
         uint128 reserved;
-        uint128 premiumsCollected;
+        uint128 premiumsCollected; // premiums + residual swept in at finalize
         uint128 claimsPaid;
-        uint32 startIndex;
-        uint32 endIndex;
+        uint32 startIndex; // window bracket, locked at finalize
+        uint32 endIndex; // window bracket, locked at finalize
         uint32 policyCount;
         uint32 settledCount;
         Status status;
+        bool finalized; // window locked (SC-03: finalize never reverts for lack of samples)
+        bool degraded; // informational: a sample gap above the threshold in the window (AE6)
+        bool snapshotTaken; // σ̂² snapshot fixed on the first touch after startsAt
+        uint128 remainingPrincipal; // Σ deposits not yet withdrawn or rolled out
+        uint128 paidOut; // Σ nets withdrawn or rolled out after settlement
+        uint128 varianceSnapshot; // σ̂² the cohort prices with (annualized WAD)
     }
 
     struct Policy {
@@ -66,6 +86,20 @@ interface ICoverVault {
     event PolicySettled(uint256 indexed policyId, uint32 indexed cohortId, uint128 payout);
     event Unclaimed(address indexed owner, uint128 amount);
     event Claimed(address indexed owner, uint256 amount);
+    /// @notice Emitted after `Finalized` (canonical event kept first for the indexer).
+    event WindowResolved(
+        uint32 indexed cohortId,
+        uint32 startIndex,
+        uint32 endIndex,
+        uint32 returnCount,
+        bool degraded,
+        bool ewmaUpdated
+    );
+    event VarianceSnapshot(uint32 indexed cohortId, uint128 variance);
+    /// @notice Rounding dust of a fully exited cohort leaves its books and becomes residual.
+    event ResidualReleased(uint32 indexed cohortId, uint256 amount);
+    /// @notice Residual swept into the premium pool of a capitalized cohort at its finalize.
+    event ResidualSwept(uint32 indexed cohortId, uint256 amount);
 
     // --- underwriter ---
     function deposit(uint32 cohortId, uint128 amount) external;
@@ -95,4 +129,14 @@ interface ICoverVault {
     // --- pull fallback for push-payout failures (B6, design §7.3) ---
     function unclaimed(address owner) external view returns (uint256 amount);
     function claimUnclaimed() external returns (uint256 amount);
+
+    // --- calendar & status (plan "Kalender dan status") ---
+    function startsAt(uint32 cohortId) external view returns (uint64);
+    function endsAt(uint32 cohortId) external view returns (uint64);
+    function currentCohortId() external view returns (uint32);
+    function statusOf(uint32 cohortId) external view returns (Status);
+
+    // --- accounting (plan "Akuntansi", invariant I3) ---
+    function totalObligations() external view returns (uint256);
+    function residual() external view returns (uint256);
 }

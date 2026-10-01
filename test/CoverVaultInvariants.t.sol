@@ -15,8 +15,8 @@ import {MockValuer} from "./mocks/MockValuer.sol";
 /// @title CoverVaultHandler
 /// @notice Bounded actor that drives ONE CoverVault through its whole cohort lifecycle
 ///         under fuzzed calls: deposit (FUNDING) → buyCover (ACTIVE) → finalize →
-///         settleBatch (SETTLING) → withdraw (FUNDING/SETTLED), plus poke/warp to march
-///         the oracle and the calendar. Every action guards its own preconditions and
+///         settleBatch (SETTLING) → withdraw / rollTo (FUNDING/SETTLED), plus poke/warp to
+///         march the oracle and the gap calendar, and direct token donations (residual). Every action guards its own preconditions and
 ///         returns quietly when they do not hold, so `fail_on_revert = false` discards
 ///         nothing meaningful. Money that enters and leaves is mirrored on ghost totals
 ///         (ghostIn/ghostOut) sourced from OPPOSITE sides — amounts the handler passes IN
@@ -175,8 +175,8 @@ contract CoverVaultHandler is Test {
     function finalize(uint256 cidSeed) external {
         uint32 cid = uint32(bound(cidSeed, 0, 5));
         ICoverVault.Cohort memory c = vault.cohort(cid);
-        if (c.endsAt == 0 || vm.getBlockTimestamp() < c.endsAt) return;
-        if (c.status != ICoverVault.Status.FUNDING) return; // already finalized
+        if (vm.getBlockTimestamp() < c.endsAt) return;
+        if (c.finalized || c.totalCapital == 0) return; // done, or SETTLED by time
 
         uint256[] memory before = _snapshot();
         try vault.finalize(cid) {} catch {}
@@ -200,8 +200,8 @@ contract CoverVaultHandler is Test {
     function withdraw(uint256 actorSeed, uint256 cidSeed) external {
         address a = _actor(actorSeed);
         uint32 cid = uint32(bound(cidSeed, 0, 5));
-        ICoverVault.Status s = vault.statusOf(cid);
-        if (s != ICoverVault.Status.FUNDING && s != ICoverVault.Status.SETTLED) return;
+        // SETTLING is attempted too: a zero-policy cohort is finalized lazily by withdraw.
+        if (vault.statusOf(cid) == ICoverVault.Status.ACTIVE) return;
         if (vault.deposits(cid, a) == 0) return;
 
         uint256[] memory before = _snapshot();
@@ -210,6 +210,32 @@ contract CoverVaultHandler is Test {
             ghostOut += net;
         } catch {}
         _checkNoDebit(before); // a withdrawer is only ever credited, never debited
+    }
+
+    /// @notice Explicit roll of a settled position into a FUNDING cohort (R11). Tokens
+    ///         never move, so the ghosts are untouched.
+    function rollTo(uint256 actorSeed, uint256 fromSeed, uint256 toSeed) external {
+        address a = _actor(actorSeed);
+        uint32 from = uint32(bound(fromSeed, 0, 5));
+        uint32 to = uint32(bound(toSeed, 0, 5));
+        if (vault.deposits(from, a) == 0) return;
+        if (vault.statusOf(to) != ICoverVault.Status.FUNDING) return;
+
+        uint256[] memory before = _snapshot();
+        vm.prank(a);
+        try vault.rollTo(from, to) {
+            _touch(to);
+        } catch {}
+        _checkNoDebit(before);
+    }
+
+    /// @notice Direct transfer to the vault: becomes residual, never an underwriter's
+    ///         entitlement until swept at a finalize (plan "Akuntansi").
+    function donate(uint256 amtSeed) external {
+        uint256 amt = bound(amtSeed, 1, 1e9);
+        token.mint(address(this), amt);
+        token.transfer(address(vault), amt);
+        ghostIn += amt;
     }
 
     // ------------------------------------------------------------------
@@ -257,6 +283,8 @@ contract CoverVaultInvariants is Test {
 
     uint64 internal constant ANCHOR = 1_000_000;
     uint32 internal constant TENOR = 604_800; // 7 days
+    uint32 internal constant GAP = 86_400; // 1 day settlement gap
+    uint32 internal constant SAMPLE_INTERVAL = 1_800;
     uint16 internal constant MAX_UTIL_BPS = 8_000;
     uint128 internal constant MAX_EXCESS_VARIANCE = uint128(WAD); // maxPayout == varNotional
     uint16 internal constant EWMA_ALPHA_BPS = 2_000;
@@ -274,10 +302,12 @@ contract CoverVaultInvariants is Test {
 
     function setUp() public {
         // Start the clock at the anchor: cohort 0 is exactly ACTIVE, cohorts >=1 FUNDING.
+        // Calendar with gap: startsAt(n) = ANCHOR + n·(TENOR + GAP).
         vm.warp(ANCHOR);
 
         token = new MockERC20(6);
         acc = new MockAccumulator();
+        acc.setSampleInterval(SAMPLE_INTERVAL); // the vault reads it at deploy
         pool = new MockUniswapV3Pool();
         pm = new MockPositionManager();
         pricer = new MockPricer();
@@ -299,6 +329,7 @@ contract CoverVaultInvariants is Test {
             address(pm),
             address(token),
             TENOR,
+            GAP,
             ANCHOR,
             MAX_UTIL_BPS,
             MAX_EXCESS_VARIANCE,
@@ -357,11 +388,16 @@ contract CoverVaultInvariants is Test {
     //      leaked. ghostIn is what the handler paid; ghostOut is what the vault reported
     //      paying — independent sources, so this is not self-referential.
     // ------------------------------------------------------------------
+    //      v2 adds the tracked-obligation form (plan "Akuntansi"): balance ≥ every
+    //      obligation the vault books, and residual is exactly the excess.
     function invariant_I3_solvencyConservation() public view {
         uint256 inn = handler.ghostIn();
         uint256 out = handler.ghostOut();
         assertGe(inn, out, "I3: more left than ever entered");
-        assertEq(token.balanceOf(address(vault)), inn - out, "I3: vault balance != in - out");
+        uint256 bal = token.balanceOf(address(vault));
+        assertEq(bal, inn - out, "I3: vault balance != in - out");
+        assertGe(bal, vault.totalObligations(), "I3: balance below tracked obligations");
+        assertEq(vault.residual(), bal - vault.totalObligations(), "I3: residual != excess");
     }
 
     // ------------------------------------------------------------------
@@ -418,16 +454,19 @@ contract CoverVaultInvariants is Test {
                 }
             }
 
+            // Nets already paid out to exited underwriters are subtracted too (v2 tracks
+            // them), which makes this strictly tighter than the v0 form.
             uint256 rhs = total + uint256(c.premiumsCollected);
-            uint256 claims = c.claimsPaid;
-            rhs = rhs > claims ? rhs - claims : 0;
+            uint256 spent = uint256(c.claimsPaid) + c.paidOut;
+            rhs = rhs > spent ? rhs - spent : 0;
             assertLe(sumNet, rhs, "I6: redeemable net exceeds capital + premiums - claims");
         }
     }
 
     // ------------------------------------------------------------------
     // I7 — a SETTLED cohort has every policy settled and zero capital still reserved.
-    //      Uses the STORED status (the terminal flag), not the time-derived one.
+    //      v2: the status is calendar-derived; SETTLED means resolved (or never capitalized,
+    //      which can hold no policy), so the property holds for the derived value.
     // ------------------------------------------------------------------
     function invariant_I7_settledImpliesFullyPaidAndUnreserved() public view {
         uint32[] memory cs = handler.cohortsList();
@@ -472,8 +511,8 @@ contract CoverVaultInvariants is Test {
     ///         and the lone underwriter redeems capital + premium - claim, to the wei.
     function test_Lifecycle_PayoutHappens() public {
         uint32 cid = 1;
-        uint64 startsAt = ANCHOR + uint64(cid) * TENOR; // 1_604_800
-        uint64 endsAt = startsAt + TENOR; //               2_209_600
+        uint64 startsAt = ANCHOR + uint64(cid) * (TENOR + GAP); // 1_691_200
+        uint64 endsAt = startsAt + TENOR; //                      2_296_000
 
         // Underwriter funds the cohort while it is FUNDING.
         uint128 capital = 10_000;
@@ -532,7 +571,7 @@ contract CoverVaultInvariants is Test {
     ///         underwriter keeps capital plus the full premium.
     function test_Lifecycle_NoVariance_NoPayout() public {
         uint32 cid = 1;
-        uint64 startsAt = ANCHOR + uint64(cid) * TENOR;
+        uint64 startsAt = ANCHOR + uint64(cid) * (TENOR + GAP);
         uint64 endsAt = startsAt + TENOR;
 
         uint128 capital = 10_000;

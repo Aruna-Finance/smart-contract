@@ -44,9 +44,10 @@ contract ArunaFactory {
     struct VaultParams {
         address pool;
         uint32 tenor;
+        uint32 gap; // settlement gap (plan R8); U7 moves time params to the factory constructor
         address pricer; // per-tenor calibration, deployed outside
         address valuer; // per-market gamma calibration, deployed outside
-        uint64 anchor; // startsAt(n) = anchor + n * tenor
+        uint64 anchor; // startsAt(n) = anchor + n * (tenor + gap)
         uint16 maxUtilizationBps;
         uint128 maxExcessVariance;
         uint16 ewmaAlphaBps;
@@ -100,6 +101,7 @@ contract ArunaFactory {
                 positionManager,
                 settlementToken,
                 p.tenor,
+                p.gap,
                 p.anchor,
                 p.maxUtilizationBps,
                 p.maxExcessVariance,

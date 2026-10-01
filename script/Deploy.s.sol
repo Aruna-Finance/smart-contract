@@ -40,7 +40,8 @@ import {PositionValuer} from "../src/PositionValuer.sol";
 ///           ARUNA_FACTORY            address  a factory already deployed by DeployFactory
 ///           ARUNA_POOL               address  Uniswap v3 pool this market covers
 ///           ARUNA_TENOR              uint32   cohort length in seconds (e.g. 604800 = 7d)
-///           ARUNA_ANCHOR             uint64   startsAt(n) = anchor + n * tenor
+///           ARUNA_GAP                uint32   settlement gap seconds between cohorts
+///           ARUNA_ANCHOR             uint64   startsAt(n) = anchor + n * (tenor + gap)
 ///           ARUNA_MAX_UTIL_BPS       uint16   utilization cap (e.g. 8000 = 80%)
 ///           ARUNA_MAX_EXCESS_VARIANCE uint128 maxExcessVariance (WAD)
 ///           ARUNA_EWMA_ALPHA_BPS     uint16   EWMA smoothing (bps)
@@ -99,6 +100,7 @@ contract DeployMarket is Script {
         ArunaFactory.VaultParams memory p = ArunaFactory.VaultParams({
             pool: vm.envAddress("ARUNA_POOL"),
             tenor: _u32(vm.envUint("ARUNA_TENOR")),
+            gap: _u32(vm.envUint("ARUNA_GAP")),
             pricer: address(0), // filled after pricer deploy
             valuer: address(0), // filled after valuer deploy
             anchor: _u64(vm.envUint("ARUNA_ANCHOR")),

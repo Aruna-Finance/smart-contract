@@ -40,6 +40,7 @@ contract ArunaFactoryTest is Test {
         return ArunaFactory.VaultParams({
             pool: address(pool),
             tenor: tenor,
+            gap: 1 days,
             pricer: address(pricer),
             valuer: address(valuer),
             anchor: ANCHOR,
