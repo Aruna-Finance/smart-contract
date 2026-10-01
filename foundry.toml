@@ -41,9 +41,19 @@ arbitrum_sepolia = "${ARBITRUM_SEPOLIA_RPC_URL}"
 # is NOT a test failure — every property is asserted in the invariant_ functions, and
 # anything checked mid-action is recorded on a ghost flag (never a bare handler assert,
 # which fail_on_revert = false would silently drop).
+# depth 64: the handler has ~24 actions and a policy needs deposit → ACTIVE → buy →
+# endsAt → settle to resolve, which 32 calls rarely reach (see the call summary that
+# CoverVaultInvariants logs from afterInvariant with -vv).
 [invariant]
 runs = 128
-depth = 32
+depth = 64
+fail_on_revert = false
+
+# Nightly / pre-release depth (plan U8): `FOUNDRY_PROFILE=ci-deep forge test --mc CoverVaultInvariants -vv`
+# (about 10x the default campaign; the -vv log ends with the aggregated call summary).
+[profile.ci-deep.invariant]
+runs = 512
+depth = 256
 fail_on_revert = false
 
 [fmt]
