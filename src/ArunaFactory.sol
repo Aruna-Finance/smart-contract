@@ -49,6 +49,8 @@ contract ArunaFactory {
     /// @notice Accumulator sample interval (also the inter-sample TWAP basis, §3.2).
     uint32 public immutable sampleInterval;
 
+    uint256 internal constant BPS = 10_000;
+
     // --- keeper economics upper bounds (U6 parameters, capped here) ---
     uint16 public immutable maxKeeperShareBps;
     uint128 public immutable maxPokeBounty;
@@ -117,7 +119,7 @@ contract ArunaFactory {
     ///        (The vault constructor still bounds tenor / sampleInterval for its scan.)
     /// @param gap_ Settlement gap (seconds, > 0).
     /// @param sampleInterval_ Accumulator sample interval (seconds, > 0).
-    /// @param maxKeeperShareBps_ Upper bound on per-vault keeper share (<= 10000).
+    /// @param maxKeeperShareBps_ Upper bound on per-vault keeper share (<= BPS).
     constructor(
         address positionManager_,
         address settlementToken_,
@@ -135,7 +137,7 @@ contract ArunaFactory {
             positionManager_ == address(0) || settlementToken_ == address(0)
                 || vaultDeployer_ == address(0) || accumulatorDeployer_ == address(0)
                 || allowedTenors_.length == 0 || gap_ == 0 || sampleInterval_ == 0
-                || maxKeeperShareBps_ > 10_000
+                || maxKeeperShareBps_ > BPS
         ) revert BadConfig();
 
         for (uint256 i = 0; i < allowedTenors_.length; i++) {

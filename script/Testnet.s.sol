@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
+import {IUniswapV3PoolMinimal} from "../src/interfaces/IUniswapV3PoolMinimal.sol";
 
 /// @title Testnet
 /// @notice Stands up a REAL Uniswap v3 environment on Arbitrum Sepolia so the Aruna
@@ -158,7 +159,9 @@ interface INfpmSetup {
         returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1);
 }
 
-interface IUniV3PoolSetup {
+/// @dev Pool views the scripts read: Aruna's minimal pool slice plus the script-only
+///      `tickSpacing` / `slot0` (real Uniswap and the local mocks).
+interface IUniV3PoolSetup is IUniswapV3PoolMinimal {
     function tickSpacing() external view returns (int24);
     function slot0()
         external

@@ -9,6 +9,7 @@ import {PositionValuer} from "../src/PositionValuer.sol";
 import {VaultDeployer} from "../src/deployers/VaultDeployer.sol";
 import {AccumulatorDeployer} from "../src/deployers/AccumulatorDeployer.sol";
 import {ICoverVault} from "../src/interfaces/ICoverVault.sol";
+import {INonfungiblePositionManager} from "../src/interfaces/INonfungiblePositionManager.sol";
 
 /// @title Deploy
 /// @notice Deployment tooling for Aruna v2 (plan U9; R26, R28–R31; F3). Two scripts, split
@@ -288,7 +289,8 @@ contract DeployFactory is ArunaScript {
         string memory k = "aruna.factory.infra";
         address uniFactory;
         if (cfg.positionManager.code.length != 0) {
-            try ArunaFactoryNfpm(cfg.positionManager).factory() returns (address f) {
+            // The NFPM's Uniswap factory, recorded as infra (best effort).
+            try INonfungiblePositionManager(cfg.positionManager).factory() returns (address f) {
                 uniFactory = f;
             } catch {}
         }
@@ -297,11 +299,6 @@ contract DeployFactory is ArunaScript {
         vm.serializeAddress(k, "uniswapV3Factory", uniFactory);
         return vm.serializeAddress(k, "router", cfg.router);
     }
-}
-
-/// @dev The NFPM's Uniswap factory, recorded as infra (best effort).
-interface ArunaFactoryNfpm {
-    function factory() external view returns (address);
 }
 
 /// @notice Deploys a calibrated pricer + valuer and mints one (pool, tenor) vault on the

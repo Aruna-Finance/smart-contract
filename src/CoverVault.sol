@@ -146,13 +146,14 @@ contract CoverVault is ICoverVault {
 
     Policy[] internal _policies; // global; policyId == index
 
+    /// @inheritdoc ICoverVault
     /// @dev Every token amount the vault owes (plan "Akuntansi"): open cohort books
     ///      (capital + premiums − claims − nets paid out) plus parked payouts. Anything
     ///      the vault holds above this is residual (`residual()`).
-    uint256 internal _obligations;
+    uint256 public totalObligations;
 
     /// @inheritdoc ICoverVault
-    /// @dev Part of `_obligations` (I3): skims move tokens from a cohort's book to here,
+    /// @dev Part of `totalObligations` (I3): skims move tokens from a cohort's book to here,
     ///      donations add to both, bounties leave both.
     uint256 public keeperBudget;
 
@@ -191,10 +192,9 @@ contract CoverVault is ICoverVault {
     /// @dev The variance window a finalize locks: the samples bracketing
     ///      [startsAt, endsAt] that actually exist (SC-03).
     struct Window {
-        bool hasSamples; // some sample at-or-before endsAt exists
         uint32 startIndex;
         uint32 endIndex;
-        uint32 returnCount; // log returns in (startIndex, endIndex] (accumulator semantics)
+        uint32 returnCount; // log returns in (startIndex, endIndex]; 0 when no window
         uint32 startTs;
         uint32 endTs;
         uint128 startSumSq;
@@ -289,10 +289,8 @@ contract CoverVault is ICoverVault {
         if (_status(cohortId, c) != Status.FUNDING) revert NotFunding(cohortId);
 
         _pull(msg.sender, amount);
-        deposits[cohortId][msg.sender] += amount;
-        c.totalCapital += amount;
-        c.remainingPrincipal += amount;
-        _obligations += amount;
+        _credit(cohortId, c, msg.sender, amount);
+        totalObligations += amount;
         emit Deposited(cohortId, msg.sender, amount);
     }
 
@@ -322,7 +320,7 @@ contract CoverVault is ICoverVault {
             net = _settledNet(dep, c);
             _exitSettled(cohortId, c, dep, net);
         }
-        _obligations -= net;
+        totalObligations -= net;
 
         if (net > 0) _push(msg.sender, net); // accounted obligation; not gas-limited
         emit Withdrawn(cohortId, msg.sender, net);
@@ -349,9 +347,7 @@ contract CoverVault is ICoverVault {
 
         // Obligations unchanged: the same tokens move from one cohort's books to another.
         uint128 amount = uint128(net); // net ≤ totalCapital + premiums, well within uint128
-        deposits[toCohort][msg.sender] += amount;
-        to.totalCapital += amount;
-        to.remainingPrincipal += amount;
+        _credit(toCohort, to, msg.sender, amount);
         emit Rolled(fromCohort, toCohort, msg.sender, amount);
     }
 
@@ -405,8 +401,11 @@ contract CoverVault is ICoverVault {
 
         Cohort storage c = _cohorts[cohortId];
         if (_status(cohortId, c) != Status.ACTIVE) revert NotActive(cohortId);
+        // totalCapital / reserved / policyCount are cached: only this cohort's own
+        // (nonReentrant) entry points write them, so no external call below can move them.
+        uint128 capital = c.totalCapital;
         // SC-16: a cohort without capital sells nothing (and is SETTLED at endsAt).
-        if (c.totalCapital == 0) revert ZeroCapital(cohortId);
+        if (capital == 0) revert ZeroCapital(cohortId);
         // Too close to endsAt for two post-baseline returns even with a throttled poke:
         // refusing here closes the free-refund option (plan "Pengukuran").
         uint256 end = _endsAt(cohortId);
@@ -436,29 +435,30 @@ contract CoverVault is ICoverVault {
         // Capacity: reserved + maxPayout ≤ totalCapital * util / 10_000 (invariant I1).
         // Premiums never add capacity (§5.2): selling cover with the buyer's own money
         // is exactly what this line forbids.
-        uint128 available = uint128(uint256(c.totalCapital).mulDivDown(maxUtilizationBps, BPS));
+        uint128 available = uint128(uint256(capital).mulDivDown(maxUtilizationBps, BPS));
         // R24 / SC-16: every live slot must carry at least capacity / policyCap, so
         // filling the cap costs the whole capacity (no dust lock-out). Rounded DOWN so
         // policyCap minimum policies always fit.
         uint128 minPayout = available / policyCap;
         if (maxPayout == 0 || maxPayout < minPayout) revert BelowMinPayout(maxPayout, minPayout);
-        if (c.policyCount >= policyCap) revert PolicyCapReached(policyCap);
-        uint128 wouldReserve = c.reserved + maxPayout;
+        uint32 queueIndex = c.policyCount;
+        if (queueIndex >= policyCap) revert PolicyCapReached(policyCap);
+        uint128 reserved = c.reserved;
+        uint128 wouldReserve = reserved + maxPayout;
         if (wouldReserve > available) revert CapacityExceeded(wouldReserve, available);
 
-        uint32 coveredSeconds = _coveredSeconds(cohortId);
-        uint128 premium = pricer.quote(
-            varNotional, strikeAnnualized, coveredSeconds, sigma2, c.reserved, c.totalCapital
-        );
+        // ACTIVE ⇒ startsAt ≤ now < end, so the cover runs from now to endsAt.
+        uint32 coveredSeconds = uint32(end - block.timestamp);
+        uint128 premium =
+            pricer.quote(varNotional, strikeAnnualized, coveredSeconds, sigma2, reserved, capital);
         if (premium > maxPremium) revert PremiumTooHigh(premium, maxPremium);
 
         // Effects before interaction (CEI): reserve, record premium, store policy.
         // The keeper cut is taken after endsAt (at settle / finalize), never here (U6).
-        uint32 queueIndex = c.policyCount;
         c.reserved = wouldReserve;
         c.premiumsCollected += premium;
         c.policyCount = queueIndex + 1;
-        _obligations += premium;
+        totalObligations += premium;
 
         policyId = _policies.length;
         _policies.push(
@@ -599,8 +599,7 @@ contract CoverVault is ICoverVault {
         if (n == 0) revert NothingToSettle(cohortId);
         Cohort storage c = _cohorts[cohortId];
         if (_status(cohortId, c) != Status.SETTLING) revert NotSettling(cohortId);
-        bool finalizedHere = !c.finalized;
-        if (finalizedHere) _finalize(cohortId, c);
+        bool finalizedHere = _ensureFinalized(cohortId, c);
 
         uint256 cursor = c.settleCursor;
         uint256 end = cursor + n;
@@ -608,14 +607,18 @@ contract CoverVault is ICoverVault {
         if (end == cursor && !finalizedHere) revert NothingToSettle(cohortId);
 
         uint256 bounty;
-        uint256[] storage queue = _cohortPolicies[cohortId];
-        for (uint256 i = cursor; i < end; i++) {
-            uint256 policyId = queue[i];
-            Policy storage p = _policies[policyId];
-            if (p.status != PolicyStatus.Active) continue; // already final
-            bounty += _settleOne(policyId, p, c);
+        if (end > cursor) {
+            // A queued policy implies a sample at/before endsAt, so endIndex is valid.
+            uint128 endSumSq = accumulator.sampleAt(c.endIndex).cumulativeSumSq;
+            uint256[] storage queue = _cohortPolicies[cohortId];
+            for (uint256 i = cursor; i < end; i++) {
+                uint256 policyId = queue[i];
+                Policy storage p = _policies[policyId];
+                if (p.status != PolicyStatus.Active) continue; // already final
+                bounty += _settleOne(policyId, p, c, endSumSq);
+            }
+            c.settleCursor = uint32(end);
         }
-        if (end > cursor) c.settleCursor = uint32(end);
         _payBounty(BountyKind.Settle, bounty);
     }
 
@@ -628,8 +631,9 @@ contract CoverVault is ICoverVault {
         Cohort storage c = _cohorts[cohortId];
         if (_status(cohortId, c) != Status.SETTLING) revert NotSettling(cohortId);
         if (p.status != PolicyStatus.Active) revert PolicyNotActive(policyId);
-        if (!c.finalized) _finalize(cohortId, c);
-        _payBounty(BountyKind.Settle, _settleOne(policyId, p, c));
+        _ensureFinalized(cohortId, c);
+        uint128 endSumSq = accumulator.sampleAt(c.endIndex).cumulativeSumSq;
+        _payBounty(BountyKind.Settle, _settleOne(policyId, p, c, endSumSq));
     }
 
     // ---------------------------------------------------------------------
@@ -654,11 +658,7 @@ contract CoverVault is ICoverVault {
         nonReentrant
         returns (bool finalized, uint256 bounty)
     {
-        Cohort storage c = _cohorts[cohortId];
-        if (block.timestamp < _endsAt(cohortId) || c.finalized || c.totalCapital == 0) {
-            return (false, 0);
-        }
-        _finalize(cohortId, c);
+        if (!_ensureFinalized(cohortId, _cohorts[cohortId])) return (false, 0);
         finalized = true;
         bounty = _payBounty(BountyKind.Finalize, _takeBounty(finalizeBounty));
     }
@@ -669,7 +669,7 @@ contract CoverVault is ICoverVault {
         if (amount == 0) revert BadConfig();
         _pull(msg.sender, amount);
         keeperBudget += amount;
-        _obligations += amount;
+        totalObligations += amount;
         emit KeeperBudgetFunded(msg.sender, amount);
     }
 
@@ -687,7 +687,7 @@ contract CoverVault is ICoverVault {
         amount = _unclaimed[msg.sender];
         if (amount == 0) revert NothingToWithdraw();
         _unclaimed[msg.sender] = 0;
-        _obligations -= amount;
+        totalObligations -= amount;
         _push(msg.sender, amount);
         emit Claimed(msg.sender, amount);
     }
@@ -738,11 +738,6 @@ contract CoverVault is ICoverVault {
     }
 
     /// @inheritdoc ICoverVault
-    function totalObligations() external view returns (uint256) {
-        return _obligations;
-    }
-
-    /// @inheritdoc ICoverVault
     /// @dev Token balance above tracked obligations: direct transfers, and the rounding
     ///      dust of cohorts whose deposits have all exited. Swept into the premium pool
     ///      of the next capitalized cohort at its finalize (R5). Saturates at zero.
@@ -768,6 +763,13 @@ contract CoverVault is ICoverVault {
         return credit > claimShare ? credit - claimShare : 0;
     }
 
+    /// @dev Book `amount` of new capital for `user` in a FUNDING cohort (deposit or roll).
+    function _credit(uint32 cohortId, Cohort storage c, address user, uint128 amount) internal {
+        deposits[cohortId][user] += amount;
+        c.totalCapital += amount;
+        c.remainingPrincipal += amount;
+    }
+
     /// @dev Book a settled exit (withdraw or roll). When the last deposit leaves, the
     ///      cohort's leftover rounding dust stops being its liability and becomes
     ///      residual (plan "Akuntansi": never before every deposit is out).
@@ -779,7 +781,7 @@ contract CoverVault is ICoverVault {
             uint256 spent = uint256(c.claimsPaid) + c.paidOut;
             uint256 dust = assets > spent ? assets - spent : 0;
             if (dust > 0) {
-                _obligations -= dust;
+                totalObligations -= dust;
                 emit ResidualReleased(cohortId, dust);
             }
         }
@@ -787,7 +789,7 @@ contract CoverVault is ICoverVault {
 
     function _residual() internal view returns (uint256) {
         uint256 bal = settlementToken.balanceOf(address(this));
-        return bal > _obligations ? bal - _obligations : 0;
+        return bal > totalObligations ? bal - totalObligations : 0;
     }
 
     /// @dev Per-policy payout (§7.2). No annualization: strike is scaled to the
@@ -837,8 +839,10 @@ contract CoverVault is ICoverVault {
     ///      Keeper (U6): a MEASURED policy's cut, premium × keeperShareBps / BPS rounded
     ///      DOWN, moves from the cohort's premium pool to the budget (obligations
     ///      unchanged); a refund is never cut. Returns the settle bounty already taken
-    ///      out of the budget for the caller: min(settleBounty, cut, budget).
-    function _settleOne(uint256 policyId, Policy storage p, Cohort storage c)
+    ///      out of the budget for the caller: min(settleBounty, cut) (the budget, which
+    ///      just received the cut, always covers it). `endSumSq` is the cumulative sum at
+    ///      the cohort's endIndex, read once by the caller.
+    function _settleOne(uint256 policyId, Policy storage p, Cohort storage c, uint128 endSumSq)
         internal
         returns (uint256 bounty)
     {
@@ -855,32 +859,44 @@ contract CoverVault is ICoverVault {
         if (uint256(s) + 2 <= c.endIndex) {
             // ≥ 2 returns after the baseline
             uint128 startSumSq = accumulator.sampleAt(s).cumulativeSumSq;
-            uint128 endSumSq = accumulator.sampleAt(c.endIndex).cumulativeSumSq;
             p.startSumSq = startSumSq;
             p.status = PolicyStatus.Settled;
             uint128 payout = _computePayout(p, startSumSq, endSumSq);
             if (payout > 0) {
                 c.claimsPaid += payout;
                 // A parked payout stays an obligation until claimUnclaimed.
-                if (_pushPayout(owner, payout)) _obligations -= payout;
+                if (_pushPayout(owner, payout)) totalObligations -= payout;
             }
             emit PolicySettled(policyId, cohortId, payout);
-            uint128 skim = uint128(uint256(p.premium).mulDivDown(keeperShareBps, BPS));
+            uint128 skim = _skim(c, p.premium);
             if (skim > 0) {
-                c.premiumsCollected -= skim;
-                keeperBudget += skim;
                 emit PolicySkimmed(policyId, cohortId, skim);
-                bounty = _takeBounty(Math.min(settleBounty, skim));
+                // The skim just entered the budget, so min(settleBounty, skim, budget) is
+                // min(settleBounty, skim): reserved out of budget and obligations now, paid
+                // (or put back on failure) by the caller's `_payBounty`.
+                bounty = Math.min(settleBounty, skim);
+                keeperBudget -= bounty;
+                totalObligations -= bounty;
             }
         } else {
             uint128 premium = p.premium;
             p.status = PolicyStatus.Refunded;
             c.premiumsCollected -= premium;
             emit PolicySettled(policyId, cohortId, 0);
-            if (premium > 0 && _pushPayout(owner, premium)) _obligations -= premium;
+            if (premium > 0 && _pushPayout(owner, premium)) totalObligations -= premium;
             emit PolicyRefunded(policyId, cohortId, premium);
         }
         _returnPosition(policyId, p);
+    }
+
+    /// @dev Keeper cut of `base` (premium × keeperShareBps / BPS, rounded DOWN): moves from
+    ///      the cohort's premium pool to the keeper budget; obligations unchanged (U6).
+    function _skim(Cohort storage c, uint256 base) internal returns (uint128 skim) {
+        skim = uint128(base.mulDivDown(keeperShareBps, BPS));
+        if (skim > 0) {
+            c.premiumsCollected -= skim;
+            keeperBudget += skim;
+        }
     }
 
     /// @dev Window baseline for a purchase at `purchasedAt`: j = first sample with
@@ -947,11 +963,7 @@ contract CoverVault is ICoverVault {
 
         // Keeper cut of cancelled premiums, taken exactly once here (cancelled policies
         // have left the settle queue; finalize runs once per cohort). Rounded DOWN.
-        uint128 cSkim = uint128(uint256(c.cancelledPremiums).mulDivDown(keeperShareBps, BPS));
-        if (cSkim > 0) {
-            c.premiumsCollected -= cSkim;
-            keeperBudget += cSkim;
-        }
+        uint128 cSkim = _skim(c, c.cancelledPremiums);
 
         // Residual (direct transfers, dust of fully exited cohorts) joins this cohort's
         // premium pool, so its underwriters own it from now on (R5).
@@ -960,7 +972,7 @@ contract CoverVault is ICoverVault {
             uint256 room = type(uint128).max - c.premiumsCollected;
             if (swept > room) swept = room;
             c.premiumsCollected += uint128(swept);
-            _obligations += swept;
+            totalObligations += swept;
         }
 
         if (c.settledCount == c.policyCount) c.status = Status.SETTLED; // no policies: done
@@ -976,7 +988,7 @@ contract CoverVault is ICoverVault {
     /// @dev The samples bracketing [startsAt, endsAt] that exist. endIndex is the last
     ///      sample at/before endsAt (a late finalize adds no variance, §7.5); startIndex
     ///      the last at/before startsAt, or — when the first sample came after startsAt
-    ///      (SC-03) — sample 0. No sample at/before endsAt ⇒ no window (hasSamples false).
+    ///      (SC-03) — sample 0. No sample at/before endsAt ⇒ no window (all zero).
     function _window(uint32 cohortId) internal view returns (Window memory w) {
         if (accumulator.sampleCount() == 0) return w;
         uint256 s = _startsAt(cohortId);
@@ -984,7 +996,6 @@ contract CoverVault is ICoverVault {
         IVarianceAccumulator.Sample memory first = accumulator.sampleAt(0);
         if (first.timestamp > e) return w;
 
-        w.hasSamples = true;
         w.endIndex = accumulator.indexAtOrBefore(uint64(e));
         w.startIndex = first.timestamp > s ? 0 : accumulator.indexAtOrBefore(uint64(s));
 
@@ -1011,7 +1022,7 @@ contract CoverVault is ICoverVault {
         returns (bool updated, uint128 value)
     {
         value = ewmaVariance;
-        if (!w.hasSamples || w.returnCount < 2 || w.endTs <= w.startTs) return (false, value);
+        if (w.returnCount < 2 || w.endTs <= w.startTs) return (false, value);
         if (ewmaEverUpdated && cohortId <= lastEwmaCohortId) return (false, value);
 
         uint256 sumSq = w.endSumSq - w.startSumSq; // monotonic ⇒ never underflows (I5)
@@ -1029,7 +1040,7 @@ contract CoverVault is ICoverVault {
     ///      steps (its head sample is within the threshold before startsAt and samples are
     ///      ≥ sampleInterval apart), so a longer span is degraded without scanning.
     function _scanDegraded(uint32 cohortId, Window memory w) internal view returns (bool) {
-        if (!w.hasSamples || w.returnCount < 2) return true;
+        if (w.returnCount < 2) return true; // also covers "no window"
         uint256 thr = DEGRADED_GAP_MULTIPLE * sampleInterval;
         uint256 s = _startsAt(cohortId);
         if (w.startTs > s + thr || w.startTs + thr < s) return true; // head uncovered
@@ -1051,10 +1062,7 @@ contract CoverVault is ICoverVault {
     ///      order (R10, AE3). Later touches return the stored snapshot.
     function _touchSnapshot(uint32 cohortId, Cohort storage c) internal returns (uint128 v) {
         if (c.snapshotTaken) return c.varianceSnapshot;
-        if (cohortId > 0) {
-            Cohort storage prev = _cohorts[cohortId - 1];
-            if (!prev.finalized && prev.totalCapital > 0) _finalize(cohortId - 1, prev);
-        }
+        if (cohortId > 0) _ensureFinalized(cohortId - 1, _cohorts[cohortId - 1]);
         v = ewmaVariance;
         c.snapshotTaken = true;
         c.varianceSnapshot = v;
@@ -1067,8 +1075,7 @@ contract CoverVault is ICoverVault {
         if (c.snapshotTaken) return c.varianceSnapshot;
         if (cohortId > 0) {
             uint32 prevId = cohortId - 1;
-            Cohort storage prev = _cohorts[prevId];
-            if (!prev.finalized && prev.totalCapital > 0 && block.timestamp >= _endsAt(prevId)) {
+            if (_needsFinalize(prevId, _cohorts[prevId])) {
                 (, uint128 v) = _ewmaAfter(prevId, _window(prevId));
                 return v;
             }
@@ -1106,10 +1113,24 @@ contract CoverVault is ICoverVault {
     ///      as is (withdraw/roll then revert until settlement resolves it).
     function _resolveForExit(uint32 cohortId, Cohort storage c) internal returns (Status s) {
         s = _status(cohortId, c);
-        if (s == Status.SETTLING && !c.finalized && c.policyCount == 0) {
-            _finalize(cohortId, c);
+        if (s == Status.SETTLING && c.policyCount == 0 && _ensureFinalized(cohortId, c)) {
             s = Status.SETTLED;
         }
+    }
+
+    /// @dev The one finalize gate: endsAt passed, window not yet locked, and the cohort
+    ///      held capital (a capital-less cohort is SETTLED by time, nothing to finalize).
+    function _needsFinalize(uint32 cohortId, Cohort storage c) internal view returns (bool) {
+        return block.timestamp >= _endsAt(cohortId) && !c.finalized && c.totalCapital > 0;
+    }
+
+    /// @dev Finalize `cohortId` iff `_needsFinalize`; returns whether this call did.
+    function _ensureFinalized(uint32 cohortId, Cohort storage c)
+        internal
+        returns (bool didFinalize)
+    {
+        didFinalize = _needsFinalize(cohortId, c);
+        if (didFinalize) _finalize(cohortId, c);
     }
 
     function _coveredSeconds(uint32 cohortId) internal view returns (uint32) {
@@ -1135,20 +1156,27 @@ contract CoverVault is ICoverVault {
     // Internal — token movement
     // ---------------------------------------------------------------------
 
+    /// @dev Low-level call to the settlement token with at most `gasCap` gas (`gasleft()`
+    ///      forwards everything the EVM allows). Succeeds iff the call did not revert and
+    ///      returned either no data (USDT-style) or `true`.
+    function _tokenCall(bytes memory data, uint256 gasCap) private returns (bool) {
+        (bool ok, bytes memory ret) = address(settlementToken).call{gas: gasCap}(data);
+        return ok && (ret.length == 0 || abi.decode(ret, (bool)));
+    }
+
     /// @dev Pull `amount` from `from` into the vault (deposits, premiums). Handles
     ///      tokens that return no data (USDT-style) as well as bool-returning ones.
     function _pull(address from, uint256 amount) internal {
-        (bool ok, bytes memory data) = address(settlementToken)
-            .call(abi.encodeWithSelector(IERC20.transferFrom.selector, from, address(this), amount));
-        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+        bytes memory data =
+            abi.encodeWithSelector(IERC20.transferFrom.selector, from, address(this), amount);
+        if (!_tokenCall(data, gasleft())) revert TransferFailed();
     }
 
     /// @dev Push `amount` to `to` for obligations we already accounted (underwriter
     ///      withdraw, unclaimed pull). Full gas: these are trusted, non-batch paths.
     function _push(address to, uint256 amount) internal {
-        (bool ok, bytes memory data) = address(settlementToken)
-            .call(abi.encodeWithSelector(IERC20.transfer.selector, to, amount));
-        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+        bytes memory data = abi.encodeWithSelector(IERC20.transfer.selector, to, amount);
+        if (!_tokenCall(data, gasleft())) revert TransferFailed();
     }
 
     /// @dev Reserve min(want, budget) for a bounty: leaves the budget and obligations now
@@ -1157,7 +1185,7 @@ contract CoverVault is ICoverVault {
         amount = Math.min(want, keeperBudget);
         if (amount > 0) {
             keeperBudget -= amount;
-            _obligations -= amount;
+            totalObligations -= amount;
         }
     }
 
@@ -1166,15 +1194,13 @@ contract CoverVault is ICoverVault {
     ///      budget and the keeper action still succeeds. Returns what was actually paid.
     function _payBounty(BountyKind kind, uint256 amount) internal returns (uint256) {
         if (amount == 0) return 0;
-        (bool ok, bytes memory data) = address(settlementToken).call{gas: PUSH_GAS}(
-            abi.encodeWithSelector(IERC20.transfer.selector, msg.sender, amount)
-        );
-        if (ok && (data.length == 0 || abi.decode(data, (bool)))) {
+        bytes memory data = abi.encodeWithSelector(IERC20.transfer.selector, msg.sender, amount);
+        if (_tokenCall(data, PUSH_GAS)) {
             emit KeeperBountyPaid(msg.sender, kind, amount);
             return amount;
         }
         keeperBudget += amount;
-        _obligations += amount;
+        totalObligations += amount;
         emit KeeperBountyFailed(msg.sender, kind, amount);
         return 0;
     }
@@ -1183,10 +1209,7 @@ contract CoverVault is ICoverVault {
     ///      burns gas is parked in `unclaimed` and the batch continues (§7.3).
     ///      Returns whether the tokens actually left the vault.
     function _pushPayout(address to, uint128 amount) internal returns (bool sent) {
-        (bool ok, bytes memory data) = address(settlementToken).call{gas: PUSH_GAS}(
-            abi.encodeWithSelector(IERC20.transfer.selector, to, amount)
-        );
-        sent = ok && (data.length == 0 || abi.decode(data, (bool)));
+        sent = _tokenCall(abi.encodeWithSelector(IERC20.transfer.selector, to, amount), PUSH_GAS);
         if (!sent) {
             _unclaimed[to] += amount;
             emit Unclaimed(to, amount);

@@ -3,20 +3,12 @@ pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
 import {ArunaScript, IScriptToken} from "./base/ArunaScript.sol";
-import {INfpmSetup, ISwapRouter02} from "./Testnet.s.sol";
+import {INfpmSetup, ISwapRouter02, IUniV3PoolSetup} from "./Testnet.s.sol";
 import {CoverVault} from "../src/CoverVault.sol";
 import {ICoverVault} from "../src/interfaces/ICoverVault.sol";
 import {RejectingReceiver} from "../test/mocks/RejectingReceiver.sol";
 
-/// @dev Pool / NFPM views the lifecycle scripts read (real Uniswap and the local mocks).
-interface IOpsPool {
-    function token0() external view returns (address);
-    function token1() external view returns (address);
-    function fee() external view returns (uint24);
-    function tickSpacing() external view returns (int24);
-    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
-}
-
+/// @dev The NFPM call the lifecycle scripts route through `_act`.
 interface IOpsNfpm {
     function approve(address to, uint256 tokenId) external;
 }
@@ -61,7 +53,7 @@ abstract contract OpsBase is ArunaScript {
     }
 
     function _tick(address pool) internal view returns (int24 tick) {
-        (, tick,,,,,) = IOpsPool(pool).slot0();
+        (, tick,,,,,) = IUniV3PoolSetup(pool).slot0();
     }
 
     /// @dev Mint a position of `pool` centered on the current tick, ±halfWidth rounded out
@@ -75,9 +67,9 @@ abstract contract OpsBase is ArunaScript {
         uint256 amount1,
         bool mintTokens
     ) internal returns (uint256 tokenId, uint128 liquidity) {
-        address t0 = IOpsPool(pool).token0();
-        address t1 = IOpsPool(pool).token1();
-        int24 spacing = IOpsPool(pool).tickSpacing();
+        address t0 = IUniV3PoolSetup(pool).token0();
+        address t1 = IUniV3PoolSetup(pool).token1();
+        int24 spacing = IUniV3PoolSetup(pool).tickSpacing();
         int24 tick = _tick(pool);
         int24 center = tick / spacing * spacing;
         if (tick < 0 && tick % spacing != 0) center -= spacing; // floor toward -inf
@@ -93,7 +85,7 @@ abstract contract OpsBase is ArunaScript {
                 INfpmSetup.MintParams({
                     token0: t0,
                     token1: t1,
-                    fee: IOpsPool(pool).fee(),
+                    fee: IUniV3PoolSetup(pool).fee(),
                     tickLower: center - hw,
                     tickUpper: center + hw,
                     amount0Desired: amount0,
@@ -313,8 +305,8 @@ contract Ops is OpsBase {
         if (pool == address(0)) pool = address(_vault().pool());
         uint256 amountIn = vm.envUint("ARUNA_SWAP_IN");
         bool zeroForOne = vm.envOr("ARUNA_ZERO_FOR_ONE", true);
-        address t0 = IOpsPool(pool).token0();
-        address t1 = IOpsPool(pool).token1();
+        address t0 = IUniV3PoolSetup(pool).token0();
+        address t1 = IUniV3PoolSetup(pool).token1();
         (address tokenIn, address tokenOut) = zeroForOne ? (t0, t1) : (t1, t0);
         tickBefore = _tick(pool);
 
@@ -326,7 +318,7 @@ contract Ops is OpsBase {
                 ISwapRouter02.ExactInputSingleParams({
                     tokenIn: tokenIn,
                     tokenOut: tokenOut,
-                    fee: IOpsPool(pool).fee(),
+                    fee: IUniV3PoolSetup(pool).fee(),
                     recipient: msg.sender,
                     amountIn: amountIn,
                     amountOutMinimum: 0,

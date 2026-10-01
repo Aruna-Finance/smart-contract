@@ -7,7 +7,7 @@ import {ICoverVault} from "../../src/interfaces/ICoverVault.sol";
 /// @title Obligations
 /// @notice Independent recomputation of everything a CoverVault owes (plan U8, I3 new form;
 ///         design §9.1 "saldo ≥ semua kewajiban"). It never reads the vault's own
-///         `_obligations` counter: it rebuilds the liability from the cohort books, the
+///         `totalObligations` counter: it rebuilds the liability from the cohort books, the
 ///         parked payouts and the keeper budget, so a bug that keeps the vault's counter
 ///         self-consistent while a cohort book drifts (SC-01: a FUNDING withdraw that left
 ///         phantom capital behind) still shows up as owed > balance.

@@ -840,7 +840,7 @@ contract CoverVaultV0Sc01 is CoverVault {
     function withdrawV0(uint32 cohortId) external {
         uint128 dep = deposits[cohortId][msg.sender];
         deposits[cohortId][msg.sender] = 0;
-        _obligations -= dep;
+        totalObligations -= dep;
         _push(msg.sender, dep);
     }
 }
