@@ -644,7 +644,11 @@ contract CoverVaultPolicyTest is Test {
             MAX_EXCESS,
             ALPHA_BPS,
             SEED_VAR,
-            POLICY_CAP
+            POLICY_CAP,
+            0,
+            0,
+            0,
+            0
         );
     }
 

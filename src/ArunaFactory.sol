@@ -54,6 +54,10 @@ contract ArunaFactory {
         uint128 seedVariance;
         uint32 sampleInterval; // accumulator: first vault per pool only
         uint32 policyCap; // max live policies per cohort (R24)
+        uint16 keeperShareBps; // keeper cut of premiums after endsAt (U6); bounded in U7
+        uint128 pokeBounty; // fixed keeper bounties, settlement-token units (U6)
+        uint128 finalizeBounty;
+        uint128 settleBounty;
     }
 
     error BadConfig();
@@ -108,7 +112,11 @@ contract ArunaFactory {
                 p.maxExcessVariance,
                 p.ewmaAlphaBps,
                 p.seedVariance,
-                p.policyCap
+                p.policyCap,
+                p.keeperShareBps,
+                p.pokeBounty,
+                p.finalizeBounty,
+                p.settleBounty
             )
         );
 

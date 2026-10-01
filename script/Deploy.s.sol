@@ -48,6 +48,10 @@ import {PositionValuer} from "../src/PositionValuer.sol";
 ///           ARUNA_SEED_VARIANCE      uint128  initial ewmaVariance (WAD)
 ///           ARUNA_SAMPLE_INTERVAL    uint32   accumulator sample cadence (first tenor only)
 ///           ARUNA_POLICY_CAP         uint32   max live policies per cohort (R24)
+///           ARUNA_KEEPER_SHARE_BPS   uint16   keeper cut of premiums after endsAt (bps)
+///           ARUNA_POKE_BOUNTY        uint128  keeper bounty per added sample (token units)
+///           ARUNA_FINALIZE_BOUNTY    uint128  keeper bounty per cohort finalize
+///           ARUNA_SETTLE_BOUNTY      uint128  keeper bounty cap per measured policy settled
 ///
 ///           ARUNA_PRICER_MIN_PREMIUM uint128  floor premium (settlement units)
 ///           ARUNA_PRICER_LOAD_BPS    uint16   underwriter load (bps, <= 5000)
@@ -110,7 +114,11 @@ contract DeployMarket is Script {
             ewmaAlphaBps: _u16(vm.envUint("ARUNA_EWMA_ALPHA_BPS")),
             seedVariance: _u128(vm.envUint("ARUNA_SEED_VARIANCE")),
             sampleInterval: _u32(vm.envUint("ARUNA_SAMPLE_INTERVAL")),
-            policyCap: _u32(vm.envUint("ARUNA_POLICY_CAP"))
+            policyCap: _u32(vm.envUint("ARUNA_POLICY_CAP")),
+            keeperShareBps: _u16(vm.envUint("ARUNA_KEEPER_SHARE_BPS")),
+            pokeBounty: _u128(vm.envUint("ARUNA_POKE_BOUNTY")),
+            finalizeBounty: _u128(vm.envUint("ARUNA_FINALIZE_BOUNTY")),
+            settleBounty: _u128(vm.envUint("ARUNA_SETTLE_BOUNTY"))
         });
 
         vm.startBroadcast();

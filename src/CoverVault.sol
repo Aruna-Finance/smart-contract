@@ -47,6 +47,14 @@ import {Math} from "./libraries/Math.sol";
 ///         rejected by `onERC721Received`, but a plain `transferFrom` straight to the
 ///         vault cannot be detected (no hook runs). Such an NFT is attached to no
 ///         policy and is UNRECOVERABLE — there is no admin and no rescue path.
+///
+///         v2 keeper (plan "Keeper", U6): a vault-global `keeperBudget`, booked as an
+///         obligation, is fed by a cut of premiums taken AFTER endsAt (measured policies
+///         at their settle, cancelled premiums once at finalize; refunds are never cut)
+///         and by permissionless donations. Keeper wrappers pay a fixed bounty, capped by
+///         what is left, only when the call actually changed state; a settle bounty is
+///         also capped by the policy's own cut, so buy–cancel–self-settle never profits.
+///         An empty budget or a failed bounty transfer never fails the action.
 contract CoverVault is ICoverVault {
     using Math for uint256;
 
@@ -106,6 +114,17 @@ contract CoverVault is ICoverVault {
     ///         capacity, so a cohort cannot be locked with dust policies.
     uint32 public immutable policyCap;
 
+    /// @notice Keeper cut of a premium (bps), taken after endsAt — rounded DOWN so the
+    ///         underwriters' premium share is never below its entitlement (§9.2).
+    uint16 public immutable keeperShareBps;
+    /// @notice Fixed bounties (settlement-token units), each paid as min(bounty, budget).
+    ///         Upper bounds are enforced by the factory (U7).
+    uint128 public immutable pokeBounty;
+    uint128 public immutable finalizeBounty;
+    /// @notice Per policy actually settled MEASURED: min(settleBounty, that policy's own
+    ///         cut, budget). Refunded / cancelled / zero-cut policies earn nothing.
+    uint128 public immutable settleBounty;
+
     /// @dev Max samples between the window's bracketing indices when NOT degraded:
     ///      tenor/interval + DEGRADED_GAP_MULTIPLE + 1 (see _scanDegraded).
     uint256 internal immutable _maxScan;
@@ -131,6 +150,11 @@ contract CoverVault is ICoverVault {
     ///      (capital + premiums − claims − nets paid out) plus parked payouts. Anything
     ///      the vault holds above this is residual (`residual()`).
     uint256 internal _obligations;
+
+    /// @inheritdoc ICoverVault
+    /// @dev Part of `_obligations` (I3): skims move tokens from a cohort's book to here,
+    ///      donations add to both, bounties leave both.
+    uint256 public keeperBudget;
 
     uint256 internal _locked = 1; // reentrancy guard (1 = free, 2 = entered)
 
@@ -162,6 +186,7 @@ contract CoverVault is ICoverVault {
     error NotParked(uint256 policyId);
     error ZeroRecipient();
     error UnsolicitedPosition(uint256 tokenId);
+    error NothingToSettle(uint32 cohortId);
 
     /// @dev The variance window a finalize locks: the samples bracketing
     ///      [startsAt, endsAt] that actually exist (SC-03).
@@ -186,6 +211,8 @@ contract CoverVault is ICoverVault {
     /// @param gap_ Settlement gap in seconds (R8): forwarded by the factory, > 0 so a
     ///        settled cohort can roll into the next one before it starts.
     /// @param policyCap_ Max live policies per cohort (> 0); see `policyCap`.
+    /// @param keeperShareBps_ Keeper cut of premiums (≤ BPS); see `keeperShareBps`.
+    /// @param pokeBounty_ / finalizeBounty_ / settleBounty_ Fixed keeper bounties.
     /// @dev `sampleInterval` is read from the accumulator, which must already be
     ///      configured; the scan bound is validated against it here.
     constructor(
@@ -202,14 +229,18 @@ contract CoverVault is ICoverVault {
         uint128 maxExcessVariance_,
         uint16 ewmaAlphaBps_,
         uint128 seedVariance_,
-        uint32 policyCap_
+        uint32 policyCap_,
+        uint16 keeperShareBps_,
+        uint128 pokeBounty_,
+        uint128 finalizeBounty_,
+        uint128 settleBounty_
     ) {
         if (
             pool_ == address(0) || accumulator_ == address(0) || pricer_ == address(0)
                 || valuer_ == address(0) || positionManager_ == address(0)
                 || settlementToken_ == address(0) || tenor_ == 0 || gap_ == 0
                 || maxUtilizationBps_ == 0 || maxUtilizationBps_ > BPS || maxExcessVariance_ == 0
-                || ewmaAlphaBps_ > BPS || policyCap_ == 0
+                || ewmaAlphaBps_ > BPS || policyCap_ == 0 || keeperShareBps_ > BPS
         ) revert BadConfig();
 
         uint32 interval = IVarianceAccumulator(accumulator_).sampleInterval();
@@ -238,6 +269,10 @@ contract CoverVault is ICoverVault {
         ewmaAlphaBps = ewmaAlphaBps_;
         ewmaVariance = seedVariance_;
         policyCap = policyCap_;
+        keeperShareBps = keeperShareBps_;
+        pokeBounty = pokeBounty_;
+        finalizeBounty = finalizeBounty_;
+        settleBounty = settleBounty_;
     }
 
     // ---------------------------------------------------------------------
@@ -418,7 +453,7 @@ contract CoverVault is ICoverVault {
         if (premium > maxPremium) revert PremiumTooHigh(premium, maxPremium);
 
         // Effects before interaction (CEI): reserve, record premium, store policy.
-        // TODO(U6): the keeper skim is taken after endsAt (at settle / finalize), never here.
+        // The keeper cut is taken after endsAt (at settle / finalize), never here (U6).
         uint32 queueIndex = c.policyCount;
         c.reserved = wouldReserve;
         c.premiumsCollected += premium;
@@ -557,23 +592,31 @@ contract CoverVault is ICoverVault {
     ///      skipped; the cohort resolves when every live policy is final, independent of
     ///      the cursor. A reverting recipient is parked in `unclaimed` and cannot block
     ///      the batch (§7.3); a failed NFT return is parked too.
+    ///      Keeper (U6): the caller earns the settle bounty of every policy this call
+    ///      resolved (see `settleBounty`), paid once, last. `n == 0`, or a call that
+    ///      would change nothing (already finalized, empty range), reverts NothingToSettle.
     function settleBatch(uint32 cohortId, uint32 n) external nonReentrant {
+        if (n == 0) revert NothingToSettle(cohortId);
         Cohort storage c = _cohorts[cohortId];
         if (_status(cohortId, c) != Status.SETTLING) revert NotSettling(cohortId);
-        if (!c.finalized) _finalize(cohortId, c);
+        bool finalizedHere = !c.finalized;
+        if (finalizedHere) _finalize(cohortId, c);
 
         uint256 cursor = c.settleCursor;
         uint256 end = cursor + n;
         if (end > c.policyCount) end = c.policyCount;
+        if (end == cursor && !finalizedHere) revert NothingToSettle(cohortId);
 
+        uint256 bounty;
         uint256[] storage queue = _cohortPolicies[cohortId];
         for (uint256 i = cursor; i < end; i++) {
             uint256 policyId = queue[i];
             Policy storage p = _policies[policyId];
             if (p.status != PolicyStatus.Active) continue; // already final
-            _settleOne(policyId, p, c);
+            bounty += _settleOne(policyId, p, c);
         }
         if (end > cursor) c.settleCursor = uint32(end);
+        _payBounty(BountyKind.Settle, bounty);
     }
 
     /// @inheritdoc ICoverVault
@@ -586,7 +629,48 @@ contract CoverVault is ICoverVault {
         if (_status(cohortId, c) != Status.SETTLING) revert NotSettling(cohortId);
         if (p.status != PolicyStatus.Active) revert PolicyNotActive(policyId);
         if (!c.finalized) _finalize(cohortId, c);
-        _settleOne(policyId, p, c);
+        _payBounty(BountyKind.Settle, _settleOne(policyId, p, c));
+    }
+
+    // ---------------------------------------------------------------------
+    // Keeper (plan "Keeper", U6)
+    // ---------------------------------------------------------------------
+
+    /// @inheritdoc ICoverVault
+    /// @dev Pays only when the accumulator actually added a sample, so two vaults sharing
+    ///      one accumulator pay at most one bounty per interval (the second call is
+    ///      throttled). Pokes run from buyCover pay nothing.
+    function keeperPoke() external nonReentrant returns (bool sampled, uint256 bounty) {
+        sampled = accumulator.tryPoke();
+        if (sampled) bounty = _payBounty(BountyKind.Poke, _takeBounty(pokeBounty));
+    }
+
+    /// @inheritdoc ICoverVault
+    /// @dev Pays only when THIS call finalized the cohort: before endsAt, already
+    ///      finalized (explicitly or lazily), or never capitalized → (false, 0) and no
+    ///      revert, so a keeper bot can call it blindly.
+    function keeperFinalize(uint32 cohortId)
+        external
+        nonReentrant
+        returns (bool finalized, uint256 bounty)
+    {
+        Cohort storage c = _cohorts[cohortId];
+        if (block.timestamp < _endsAt(cohortId) || c.finalized || c.totalCapital == 0) {
+            return (false, 0);
+        }
+        _finalize(cohortId, c);
+        finalized = true;
+        bounty = _payBounty(BountyKind.Finalize, _takeBounty(finalizeBounty));
+    }
+
+    /// @inheritdoc ICoverVault
+    /// @dev Pure donation: the funder gets no claim on anything. Booked as an obligation.
+    function fundKeeperBudget(uint256 amount) external nonReentrant {
+        if (amount == 0) revert BadConfig();
+        _pull(msg.sender, amount);
+        keeperBudget += amount;
+        _obligations += amount;
+        emit KeeperBudgetFunded(msg.sender, amount);
     }
 
     // ---------------------------------------------------------------------
@@ -750,7 +834,14 @@ contract CoverVault is ICoverVault {
     ///      as §7.2. Either way `reserved` is released and the NFT returned. Canonical
     ///      `PolicySettled` first (preceded by `Unclaimed` iff the payout parked), then
     ///      the v2 events. Effects before interactions.
-    function _settleOne(uint256 policyId, Policy storage p, Cohort storage c) internal {
+    ///      Keeper (U6): a MEASURED policy's cut, premium × keeperShareBps / BPS rounded
+    ///      DOWN, moves from the cohort's premium pool to the budget (obligations
+    ///      unchanged); a refund is never cut. Returns the settle bounty already taken
+    ///      out of the budget for the caller: min(settleBounty, cut, budget).
+    function _settleOne(uint256 policyId, Policy storage p, Cohort storage c)
+        internal
+        returns (uint256 bounty)
+    {
         uint32 cohortId = p.cohortId;
         address owner = p.owner;
         uint32 s = _baselineIndex(p.purchasedAt);
@@ -774,7 +865,13 @@ contract CoverVault is ICoverVault {
                 if (_pushPayout(owner, payout)) _obligations -= payout;
             }
             emit PolicySettled(policyId, cohortId, payout);
-            // TODO(U6): keeper skim of this measured policy's premium + settle bounty.
+            uint128 skim = uint128(uint256(p.premium).mulDivDown(keeperShareBps, BPS));
+            if (skim > 0) {
+                c.premiumsCollected -= skim;
+                keeperBudget += skim;
+                emit PolicySkimmed(policyId, cohortId, skim);
+                bounty = _takeBounty(Math.min(settleBounty, skim));
+            }
         } else {
             uint128 premium = p.premium;
             p.status = PolicyStatus.Refunded;
@@ -848,8 +945,13 @@ contract CoverVault is ICoverVault {
             ewmaEverUpdated = true;
         }
 
-        // TODO(U6): skim the keeper cut of `c.cancelledPremiums` into the keeper budget
-        //           here (cancelled policies have left the settle queue).
+        // Keeper cut of cancelled premiums, taken exactly once here (cancelled policies
+        // have left the settle queue; finalize runs once per cohort). Rounded DOWN.
+        uint128 cSkim = uint128(uint256(c.cancelledPremiums).mulDivDown(keeperShareBps, BPS));
+        if (cSkim > 0) {
+            c.premiumsCollected -= cSkim;
+            keeperBudget += cSkim;
+        }
 
         // Residual (direct transfers, dust of fully exited cohorts) joins this cohort's
         // premium pool, so its underwriters own it from now on (R5).
@@ -868,6 +970,7 @@ contract CoverVault is ICoverVault {
             cohortId, w.startIndex, w.endIndex, w.returnCount, degraded, ewmaUpdated
         );
         if (swept > 0) emit ResidualSwept(cohortId, swept);
+        if (cSkim > 0) emit CancelledPremiumsSkimmed(cohortId, cSkim);
     }
 
     /// @dev The samples bracketing [startsAt, endsAt] that exist. endIndex is the last
@@ -1046,6 +1149,34 @@ contract CoverVault is ICoverVault {
         (bool ok, bytes memory data) = address(settlementToken)
             .call(abi.encodeWithSelector(IERC20.transfer.selector, to, amount));
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+    }
+
+    /// @dev Reserve min(want, budget) for a bounty: leaves the budget and obligations now
+    ///      (effects), is transferred by `_payBounty` last.
+    function _takeBounty(uint256 want) internal returns (uint256 amount) {
+        amount = Math.min(want, keeperBudget);
+        if (amount > 0) {
+            keeperBudget -= amount;
+            _obligations -= amount;
+        }
+    }
+
+    /// @dev Pay a reserved bounty to msg.sender as the last step (CEI). Same transfer as
+    ///      `_push` but gas-capped and caught: if it fails, the amount goes back into the
+    ///      budget and the keeper action still succeeds. Returns what was actually paid.
+    function _payBounty(BountyKind kind, uint256 amount) internal returns (uint256) {
+        if (amount == 0) return 0;
+        (bool ok, bytes memory data) = address(settlementToken).call{gas: PUSH_GAS}(
+            abi.encodeWithSelector(IERC20.transfer.selector, msg.sender, amount)
+        );
+        if (ok && (data.length == 0 || abi.decode(data, (bool)))) {
+            emit KeeperBountyPaid(msg.sender, kind, amount);
+            return amount;
+        }
+        keeperBudget += amount;
+        _obligations += amount;
+        emit KeeperBountyFailed(msg.sender, kind, amount);
+        return 0;
     }
 
     /// @dev Gas-limited payout / refund push at settle. A recipient that reverts or

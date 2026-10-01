@@ -17,7 +17,8 @@ import {MockValuer} from "./mocks/MockValuer.sol";
 ///         under fuzzed calls: deposit (FUNDING) → buyCover (ACTIVE) → finalize →
 ///         settleBatch / settlePolicy (SETTLING) → withdraw / rollTo (FUNDING/SETTLED),
 ///         plus cancel (ACTIVE, U5 escrow) and poke/warp to
-///         march the oracle and the gap calendar, and direct token donations (residual). Every action guards its own preconditions and
+///         march the oracle and the gap calendar, direct token donations (residual), and the U6
+///         keeper wrappers (keeperPoke / keeperFinalize / fundKeeper). Every action guards its own preconditions and
 ///         returns quietly when they do not hold, so `fail_on_revert = false` discards
 ///         nothing meaningful. Money that enters and leaves is mirrored on ghost totals
 ///         (ghostIn/ghostOut) sourced from OPPOSITE sides — amounts the handler passes IN
@@ -49,6 +50,9 @@ contract CoverVaultHandler is Test {
     uint256 public ghostOut; // withdraw net + claims paid + claimUnclaimed (vault-reported)
     mapping(uint32 => uint256) public ghostSumMaxPayout; // Σ policy.maxPayout per cohort (I2)
     bool public i4Violated; // set if any LP balance ever DROPPED across a settlement action
+    // keeper (U6): bounties land on the handler (it is msg.sender of every keeper/settle call)
+    uint256 public ghostFunded; // Σ fundKeeperBudget amounts (handler side)
+    uint256 public ghostBounties; // Σ bounties received by the handler (token side)
 
     uint256 internal _tokenCounter; // Uniswap position ids, always >= 1 (I8)
     uint128 internal _cumSq; // last cumulativeSumSq pushed to the oracle
@@ -76,6 +80,7 @@ contract CoverVaultHandler is Test {
         tenor = tenor_;
         maxUtilBps = maxUtilBps_;
         _cumSq = seededCumSq_;
+        token.approve(address(vault), type(uint256).max); // fundKeeperBudget pulls from here
 
         for (uint256 i = 0; i < actors_.length; i++) {
             _actors.push(actors_[i]);
@@ -210,8 +215,10 @@ contract CoverVaultHandler is Test {
         if (p.status != ICoverVault.PolicyStatus.Active) return;
         if (vault.statusOf(p.cohortId) != ICoverVault.Status.SETTLING) return;
         uint256[] memory before = _snapshot();
+        uint256 hb = token.balanceOf(address(this));
         try vault.settlePolicy(pid) {} catch {}
         ghostOut += _received(before);
+        _bountySince(hb);
         _checkNoDebit(before);
     }
 
@@ -232,9 +239,11 @@ contract CoverVaultHandler is Test {
 
         uint32 n = uint32(bound(nSeed, 1, 8));
         uint256[] memory before = _snapshot();
+        uint256 hb = token.balanceOf(address(this));
         try vault.settleBatch(cid, n) {} catch {}
         // Payouts AND refunds pushed to LP owners, measured on the recipients' side.
         ghostOut += _received(before);
+        _bountySince(hb);
         _checkNoDebit(before);
     }
 
@@ -270,6 +279,33 @@ contract CoverVaultHandler is Test {
         _checkNoDebit(before);
     }
 
+    /// @notice Keeper wrapper poke (U6): pays only if a sample was added.
+    function keeperPoke() external {
+        uint256 hb = token.balanceOf(address(this));
+        try vault.keeperPoke() {} catch {}
+        _bountySince(hb);
+    }
+
+    /// @notice Keeper wrapper finalize (U6): pays only if this call finalized.
+    function keeperFinalize(uint256 cidSeed) external {
+        uint32 cid = uint32(bound(cidSeed, 0, 5));
+        uint256[] memory before = _snapshot();
+        uint256 hb = token.balanceOf(address(this));
+        try vault.keeperFinalize(cid) {} catch {}
+        _bountySince(hb);
+        _checkNoDebit(before);
+    }
+
+    /// @notice Permissionless keeper-budget donation (U6).
+    function fundKeeper(uint256 amtSeed) external {
+        uint256 amt = bound(amtSeed, 1, 1e6);
+        token.mint(address(this), amt);
+        try vault.fundKeeperBudget(amt) {
+            ghostIn += amt;
+            ghostFunded += amt;
+        } catch {}
+    }
+
     /// @notice Direct transfer to the vault: becomes residual, never an underwriter's
     ///         entitlement until swept at a finalize (plan "Akuntansi").
     function donate(uint256 amtSeed) external {
@@ -282,6 +318,15 @@ contract CoverVaultHandler is Test {
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
+
+    /// @dev Bounty received by the handler since `before`: leaves the vault (ghostOut).
+    function _bountySince(uint256 before) internal {
+        uint256 b = token.balanceOf(address(this));
+        if (b > before) {
+            ghostBounties += b - before;
+            ghostOut += b - before;
+        }
+    }
 
     function _actor(uint256 seed) internal view returns (address) {
         return _actors[bound(seed, 0, _actors.length - 1)];
@@ -340,6 +385,10 @@ contract CoverVaultInvariants is Test {
     uint128 internal constant SEED_VARIANCE = uint128(WAD / 10);
     uint128 internal constant SEED_CUMSQ = 0;
     uint32 internal constant POLICY_CAP = 8; // small, so the fuzzer reaches the cap (min 1_000 on 10k)
+    uint16 internal constant KEEPER_BPS = 1_000; // 10% cut after endsAt (U6)
+    uint128 internal constant POKE_BOUNTY = 50;
+    uint128 internal constant FINALIZE_BOUNTY = 100;
+    uint128 internal constant SETTLE_BOUNTY = 5;
 
     CoverVault internal vault;
     MockERC20 internal token;
@@ -385,7 +434,11 @@ contract CoverVaultInvariants is Test {
             MAX_EXCESS_VARIANCE,
             EWMA_ALPHA_BPS,
             SEED_VARIANCE,
-            POLICY_CAP
+            POLICY_CAP,
+            KEEPER_BPS,
+            POKE_BOUNTY,
+            FINALIZE_BOUNTY,
+            SETTLE_BOUNTY
         );
 
         address[] memory actors = new address[](3);
@@ -449,6 +502,33 @@ contract CoverVaultInvariants is Test {
         assertEq(bal, inn - out, "I3: vault balance != in - out");
         assertGe(bal, vault.totalObligations(), "I3: balance below tracked obligations");
         assertEq(vault.residual(), bal - vault.totalObligations(), "I3: residual != excess");
+        // U6: the keeper budget is a booked obligation.
+        assertGe(vault.totalObligations(), vault.keeperBudget(), "I3: budget not an obligation");
+    }
+
+    // ------------------------------------------------------------------
+    // Keeper (plan U6) — total bounties paid never exceed total budget inflows
+    // (donations + cuts), and the budget is exactly inflows − bounties. Cuts are
+    // recomputed independently from policy/cohort state: premium × bps / BPS (DOWN)
+    // per MEASURED policy, cancelledPremiums × bps / BPS per finalized cohort.
+    // ------------------------------------------------------------------
+    function invariant_Keeper_BountiesWithinInflows() public view {
+        uint256 skims;
+        uint256 n = vault.policyCount();
+        for (uint256 i = 0; i < n; i++) {
+            ICoverVault.Policy memory p = vault.policy(i);
+            if (p.status == ICoverVault.PolicyStatus.Settled) {
+                skims += uint256(p.premium).mulDivDown(KEEPER_BPS, BPS);
+            }
+        }
+        uint32[] memory cs = handler.cohortsList();
+        for (uint256 i = 0; i < cs.length; i++) {
+            ICoverVault.Cohort memory c = vault.cohort(cs[i]);
+            if (c.finalized) skims += uint256(c.cancelledPremiums).mulDivDown(KEEPER_BPS, BPS);
+        }
+        uint256 inflows = handler.ghostFunded() + skims;
+        assertLe(handler.ghostBounties(), inflows, "keeper: bounties exceed inflows");
+        assertEq(vault.keeperBudget(), inflows - handler.ghostBounties(), "keeper: budget drift");
     }
 
     // ------------------------------------------------------------------
@@ -623,13 +703,17 @@ contract CoverVaultInvariants is Test {
         );
         assertEq(uint256(vault.cohort(cid).reserved), 0, "reserved released to 0");
 
-        // Underwriter net = 10000 + premiumShare(100) - claimShare(500) = 9600.
+        // Keeper cut (U6): 100 × 10% = 10 leaves the premium pool; the settle bounty
+        // min(5, 10) went to this caller, 5 stays in the budget.
+        // Underwriter net = 10000 + premiumShare(90) - claimShare(500) = 9590.
         vm.prank(UNDERWRITER);
         uint256 net = vault.withdraw(cid);
-        assertEq(net, 9_600, "underwriter net == 9600");
+        assertEq(net, 9_590, "underwriter net == 9590");
 
-        // In (10000 + 100) == out (500 + 9600): no dust in this clean case.
-        assertEq(token.balanceOf(address(vault)), 0, "vault emptied exactly");
+        // In (10000 + 100) == out (500 + 9590 + bounty 5) + budget 5: no dust.
+        assertEq(token.balanceOf(address(this)), 5, "settle bounty to caller");
+        assertEq(vault.keeperBudget(), 5, "budget keeps the rest of the cut");
+        assertEq(token.balanceOf(address(vault)), 5, "only the keeper budget remains");
     }
 
     /// @notice Quiet market: cumulativeSumSq never rises, so no policy pays and the
@@ -664,8 +748,8 @@ contract CoverVaultInvariants is Test {
 
         vm.prank(UNDERWRITER);
         uint256 net = vault.withdraw(cid);
-        assertEq(net, 10_100, "underwriter keeps capital + full premium");
-        assertEq(token.balanceOf(address(vault)), 0, "vault emptied exactly");
+        assertEq(net, 10_090, "underwriter keeps capital + premium net of the keeper cut");
+        assertEq(token.balanceOf(address(vault)), vault.keeperBudget(), "only budget remains");
     }
 
     function _buyAsBuyer(uint32 cid, uint64 startsAt) internal {

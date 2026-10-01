@@ -99,7 +99,11 @@ contract CoverVaultCalendarTest is Test {
             MAX_EXCESS,
             ALPHA_BPS,
             SEED_VAR,
-            POLICY_CAP
+            POLICY_CAP,
+            0,
+            0,
+            0,
+            0
         );
 
         address[4] memory actors = [uw1, uw2, uw3, lp];

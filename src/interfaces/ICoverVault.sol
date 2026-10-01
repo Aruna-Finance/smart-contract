@@ -54,7 +54,7 @@ interface ICoverVault {
         uint64 endsAt;
         uint128 totalCapital; // capital at risk; frozen once ACTIVE (share denominator)
         uint128 reserved;
-        uint128 premiumsCollected; // premiums (incl. cancelled, net of refunds) + residual swept in
+        uint128 premiumsCollected; // premiums (incl. cancelled, net of refunds and keeper cuts) + residual swept in
         uint128 claimsPaid;
         uint32 startIndex; // window bracket, locked at finalize
         uint32 endIndex; // window bracket, locked at finalize
@@ -155,6 +155,27 @@ interface ICoverVault {
     ///         Emitted after `PolicySettled(policyId, cohortId, 0)`.
     event PolicyRefunded(uint256 indexed policyId, uint32 indexed cohortId, uint128 premium);
 
+    // --- v2 keeper (plan "Keeper", U6) ---
+    /// @dev Which keeper action a bounty paid for.
+    enum BountyKind {
+        Poke,
+        Finalize,
+        Settle
+    }
+
+    /// @notice A measured policy's keeper cut moved from its cohort's premium pool to the
+    ///         keeper budget at settle. Emitted after `PolicySettled`.
+    event PolicySkimmed(uint256 indexed policyId, uint32 indexed cohortId, uint128 amount);
+    /// @notice The keeper cut of a cohort's cancelled premiums, taken once at finalize.
+    event CancelledPremiumsSkimmed(uint32 indexed cohortId, uint128 amount);
+    /// @notice Permissionless top-up of the keeper budget (the funder gets no rights).
+    event KeeperBudgetFunded(address indexed funder, uint256 amount);
+    /// @notice A keeper bounty left the budget to `keeper`.
+    event KeeperBountyPaid(address indexed keeper, BountyKind indexed kind, uint256 amount);
+    /// @notice The bounty transfer failed; the amount stayed in the budget and the action
+    ///         itself still succeeded.
+    event KeeperBountyFailed(address indexed keeper, BountyKind indexed kind, uint256 amount);
+
     // --- underwriter ---
     function deposit(uint32 cohortId, uint128 amount) external;
     function withdraw(uint32 cohortId) external returns (uint256 net);
@@ -191,6 +212,16 @@ interface ICoverVault {
     function settleBatch(uint32 cohortId, uint32 n) external;
     /// @notice Settle one policy after endsAt, in any order (finalizes lazily).
     function settlePolicy(uint256 policyId) external;
+
+    // --- keeper (plan "Keeper", U6): bounties paid from the vault's keeper budget ---
+    /// @notice Poke the accumulator; pays min(pokeBounty, budget) only if a sample was added.
+    function keeperPoke() external returns (bool sampled, uint256 bounty);
+    /// @notice Finalize `cohortId` if due; pays min(finalizeBounty, budget) only if THIS
+    ///         call finalized it. Never reverts for "nothing to do" (returns false).
+    function keeperFinalize(uint32 cohortId) external returns (bool finalized, uint256 bounty);
+    /// @notice Permissionless donation to the keeper budget (no rights attached).
+    function fundKeeperBudget(uint256 amount) external;
+    function keeperBudget() external view returns (uint256);
 
     // --- pull fallback for push-payout failures (B6, design §7.3) ---
     function unclaimed(address owner) external view returns (uint256 amount);

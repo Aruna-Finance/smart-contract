@@ -49,7 +49,11 @@ contract ArunaFactoryTest is Test {
             ewmaAlphaBps: 2_000,
             seedVariance: uint128(WAD / 10),
             sampleInterval: 1_800,
-            policyCap: 100
+            policyCap: 100,
+            keeperShareBps: 0,
+            pokeBounty: 0,
+            finalizeBounty: 0,
+            settleBounty: 0
         });
     }
 

@@ -73,7 +73,11 @@ contract CoverVaultTest is Test {
             MAX_EXCESS,
             ALPHA_BPS,
             SEED_VAR,
-            POLICY_CAP
+            POLICY_CAP,
+            0,
+            0,
+            0,
+            0
         );
 
         // Fund actors and approve the vault.
