@@ -18,3 +18,8 @@ docs/
 .env
 .env.*
 !.env.example
+
+# Local anvil artifacts (U9): manifests, scenario outputs and runner results never leave
+# the machine. RC/release manifests (other chain ids) and runner/results/*.json are committed.
+/deployments/31337/
+/runner/results/local/
