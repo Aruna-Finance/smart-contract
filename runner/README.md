@@ -38,7 +38,7 @@ runner/run.sh --keeper-only     --manifest deployments/421614/sandbox.json [--un
 Flags: `--scenario`, `--keeper-only`, `--anvil`, `--manifest`, `--market N`, `--rpc-url`,
 `--until`, `--max-pokes`, `--results-dir`. The header of `run.sh` lists every environment knob:
 deposit sizes, `SWAP_IN`, `STRIKE`, `LEAD_SECS`, `POLL_SECS`, `RETRIES`, `RETRY_BACKOFF`,
-`ANVIL_STEP_DELAY`, and the others.
+`RECEIPT_WAIT`, `KEEPER_MAX_FAILS`, `KEEPER_BACKOFF`, `KEEPER_BACKOFF_MAX`, `ANVIL_STEP_DELAY`, and the others.
 
 ### Time
 
@@ -72,15 +72,53 @@ cohort SETTLED) and exits non-zero if one fails.
                "txHash": "0x…", "block": 123, "address": "0x…", "from": "0x…", "status": 1 } ] }
 ```
 
-`status` is `running`, `complete`, or `failed`. A run exits non-zero if any step has no hash or
+`status` is `running`, `complete`, `interrupted`, or `failed`. A run exits non-zero if any step has no hash or
 no successful receipt. The conformance ledger (U10) cites these hashes.
 
 ## Reliability
 
-RPC transport errors (connection, timeout, 429, 5xx) are retried up to `RETRIES` times with
-backoff. Reverts are **not** retried, because re-sending a state change such as a deposit could
-apply it twice. Each step's forge log stays in a temp dir until the run succeeds, and the path
-is printed on failure.
+**What counts as a transport error.** `is_rpc_error` (in `lib.sh`) matches only anchored
+patterns: an HTTP status 429/502/503/504 must follow an `HTTP`/`status`/`code` label or be
+followed by its reason phrase (`503 Service Unavailable`) and must not touch another digit, so an
+address, amount or revert payload that merely contains `429` is never treated as an RPC error.
+The other patterns are explicit strings: connection refused/reset/closed, `error sending
+request`, `operation timed out`/`request timed out`, rate limits (`too many requests`), `header
+not found`, and similar. Signer-side errors are classified separately: nonce errors (`nonce too
+low/high`, `already known`), underpriced sends, and `insufficient funds`.
+
+**What is retried.**
+
+- Read-only calls (`cast call`, chain time, nonces) are retried up to `RETRIES` times with a
+  linear backoff (`RETRY_BACKOFF` × attempt).
+- Idempotent keeper ops (`keeperPoke`, `keeperFinalize`, `settleBatch`, `settlePolicy`,
+  `setRejectIncoming`) are re-sent after a transport, nonce, or underpriced error. A second copy
+  is a no-op or toggles the same flag. The runner still checks first whether the failed attempt
+  landed, so a landed tx is recorded rather than sent again.
+- Everything else changes state in a way that is not idempotent: `deposit`, `fundKeeperBudget`,
+  `approveAndBuy`, `rollTo`, `withdraw`, `cancel`, `claim*`, `collectFees`, `swap`, and
+  `mintPosition`. These are **never blindly re-broadcast**. Before each attempt the runner reads
+  the signer's pending nonce. After a transport, nonce, or underpriced error it reads the tx
+  hashes that forge wrote to `broadcast/Ops.s.sol/<chainId>/<fn>-latest.json` for this attempt,
+  then waits up to `RECEIPT_WAIT` seconds for each receipt with `cast receipt`.
+  - All mined with status 1: the step succeeded. It is recorded from a copy of the broadcast file
+    with the fetched receipts and is not sent again.
+  - Any mined with status 0: the step failed as a revert. It is not resent.
+  - No hash recorded and the pending nonce is unchanged: nothing was sent, so the step is resent.
+  - Anything else (a hash with no receipt yet, a nonce that moved without a hash): the run stops
+    with the broadcast file path. Reconcile by hand before rerunning.
+- Reverts and insufficient funds are never retried.
+
+**Keeper loop (`--keeper-only`).** A failed poke, finalize, or settle in one tick is logged and
+the loop continues. If a scheduling read (`lastSampleAt`, `currentCohortId`, `statusOf`, chain
+time) comes back empty, the tick is skipped with a warning. The runner never schedules from a
+blank value. After a failed tick the loop backs off exponentially (`KEEPER_BACKOFF` doubling, capped
+at `KEEPER_BACKOFF_MAX`). It exits non-zero after `KEEPER_MAX_FAILS` consecutive failed ticks, and
+at once on insufficient funds.
+
+**Exit.** An exit trap always finalizes the results file. The status is `complete` on exit 0,
+`interrupted` on SIGINT/SIGTERM (the normal way to stop `--keeper-only`), and `failed` otherwise.
+Each step's forge log stays in a temp dir unless the run succeeds, and the path is printed on
+failure.
 
 ## Keys
 

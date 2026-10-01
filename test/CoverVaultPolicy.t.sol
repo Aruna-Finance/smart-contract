@@ -548,6 +548,151 @@ contract CoverVaultPolicyTest is Test {
         assertEq(pm.ownerOf(idB), lp2);
     }
 
+    /// @notice AE9 + AE5: a REFUND to a policy owner that rejects the settlement token.
+    ///         Fewer than 2 returns after the baseline → Refunded; the premium push fails,
+    ///         so the premium parks in `unclaimed` (canonical order: PolicySettled(…, 0),
+    ///         Unclaimed, PolicyRefunded), stays an obligation, the NFT is still delivered,
+    ///         and the owner pulls exactly the premium later.
+    function test_AE9_RejectingReceiver_RefundParked_NftDelivered() public {
+        _deposit(CAPITAL);
+        _fillTo(_s(C));
+        vm.warp(_s(C) + 1);
+
+        RejectingReceiver rr = new RejectingReceiver();
+        token.mint(address(rr), 1_000e6);
+        rr.exec(address(token), abi.encodeCall(token.approve, (address(vault), type(uint256).max)));
+        rr.exec(address(pm), abi.encodeCall(pm.setApprovalForAll, (address(vault), true)));
+        uint256 rrId = _newPosition(address(rr));
+        bytes memory ret = rr.exec(
+            address(vault),
+            abi.encodeCall(vault.buyCover, (C, rrId, 0, type(uint128).max, type(uint64).max))
+        );
+        uint256 rrPid = abi.decode(ret, (uint256));
+
+        // the keeper dies: only j and s ever arrive → < 2 returns after the baseline
+        acc.push(lastTs += INTERVAL, cum += JUMP);
+        acc.push(lastTs += INTERVAL, cum += JUMP);
+
+        token.setRejectTransfersTo(address(rr), true);
+        vm.warp(_e(C) + 1);
+        uint256 rrBefore = token.balanceOf(address(rr));
+        uint256 obligationsBefore = vault.totalObligations();
+
+        vm.recordLogs();
+        vault.settlePolicy(rrPid);
+        _assertLogSequence(
+            ICoverVault.PolicySettled.selector,
+            ICoverVault.Unclaimed.selector,
+            ICoverVault.PolicyRefunded.selector
+        );
+
+        ICoverVault.Policy memory p = vault.policy(rrPid);
+        assertEq(uint8(p.status), uint8(ICoverVault.PolicyStatus.Refunded), "refunded");
+        assertEq(token.balanceOf(address(rr)), rrBefore, "push failed: nothing received");
+        assertEq(vault.unclaimed(address(rr)), PREMIUM, "premium parked");
+        assertEq(vault.totalObligations(), obligationsBefore, "parked premium still owed");
+        assertEq(pm.ownerOf(rrId), address(rr), "NFT delivered despite the hook");
+        assertFalse(p.nftParked);
+        assertEq(uint8(vault.statusOf(C)), uint8(ICoverVault.Status.SETTLED));
+
+        token.setRejectTransfersTo(address(rr), false);
+        rr.exec(address(vault), abi.encodeCall(vault.claimUnclaimed, ()));
+        assertEq(token.balanceOf(address(rr)) - rrBefore, PREMIUM, "claimed exactly the premium");
+        assertEq(vault.unclaimed(address(rr)), 0);
+        assertEq(vault.totalObligations(), obligationsBefore - PREMIUM, "obligation released");
+    }
+
+    // =====================================================================
+    // Quote deadline
+    // =====================================================================
+
+    /// @notice buyCover's deadline is inclusive: now − 1 reverts QuoteExpired(deadline),
+    ///         deadline == now still buys.
+    function test_BuyCover_DeadlineBoundary() public {
+        _deposit(CAPITAL);
+        _fillTo(_s(C));
+        vm.warp(_s(C) + 1);
+        uint64 nowTs = uint64(vm.getBlockTimestamp());
+
+        uint256 id = _newPosition(lp);
+        vm.prank(lp);
+        vm.expectRevert(abi.encodeWithSelector(CoverVault.QuoteExpired.selector, nowTs - 1));
+        vault.buyCover(C, id, 0, type(uint128).max, nowTs - 1);
+
+        vm.prank(lp);
+        uint256 pid = vault.buyCover(C, id, 0, type(uint128).max, nowTs);
+        assertEq(vault.policy(pid).owner, lp, "bought at deadline == now");
+    }
+
+    // =====================================================================
+    // NothingToWithdraw guards
+    // =====================================================================
+
+    /// @notice FUNDING: a second withdraw after the deposit was returned reverts.
+    function test_Withdraw_TwiceInFunding_Reverts() public {
+        _deposit(CAPITAL);
+        assertEq(uint8(vault.statusOf(C)), uint8(ICoverVault.Status.FUNDING));
+        vm.prank(uw);
+        assertEq(vault.withdraw(C), CAPITAL);
+        vm.prank(uw);
+        vm.expectRevert(CoverVault.NothingToWithdraw.selector);
+        vault.withdraw(C);
+        vm.prank(stranger);
+        vm.expectRevert(CoverVault.NothingToWithdraw.selector);
+        vault.withdraw(C);
+    }
+
+    /// @notice SETTLED: a second withdraw after the net was paid reverts.
+    function test_Withdraw_TwiceAfterSettled_Reverts() public {
+        _activeWithPolicy();
+        _fillToWith(_e(C), SMALL);
+        vm.warp(_e(C) + 1);
+        vault.settleBatch(C, 10);
+        assertEq(uint8(vault.statusOf(C)), uint8(ICoverVault.Status.SETTLED));
+
+        vm.prank(uw);
+        assertGt(vault.withdraw(C), 0);
+        vm.prank(uw);
+        vm.expectRevert(CoverVault.NothingToWithdraw.selector);
+        vault.withdraw(C);
+    }
+
+    /// @notice rollTo from a SETTLED cohort reverts for a caller with no deposit there, and
+    ///         for one who already exited (by withdraw or by a previous roll).
+    function test_RollTo_NoDepositOrAlreadyExited_Reverts() public {
+        _deposit(CAPITAL / 2);
+        vm.prank(lp2);
+        vault.deposit(C, CAPITAL / 2);
+        _fillTo(_s(C));
+        vm.warp(_e(C) + 1); // no policies: finalized lazily on exit
+        assertEq(uint8(vault.statusOf(C + 1)), uint8(ICoverVault.Status.FUNDING));
+
+        vm.prank(stranger);
+        vm.expectRevert(CoverVault.NothingToWithdraw.selector);
+        vault.rollTo(C, C + 1);
+
+        vm.prank(uw);
+        vault.withdraw(C);
+        vm.prank(uw);
+        vm.expectRevert(CoverVault.NothingToWithdraw.selector);
+        vault.rollTo(C, C + 1);
+
+        vm.prank(lp2);
+        vault.rollTo(C, C + 1);
+        assertEq(vault.deposits(C + 1, lp2), CAPITAL / 2, "rolled");
+        vm.prank(lp2);
+        vm.expectRevert(CoverVault.NothingToWithdraw.selector);
+        vault.rollTo(C, C + 1);
+    }
+
+    /// @notice claimUnclaimed with nothing parked reverts.
+    function test_ClaimUnclaimed_NothingOwed_Reverts() public {
+        assertEq(vault.unclaimed(stranger), 0);
+        vm.prank(stranger);
+        vm.expectRevert(CoverVault.NothingToWithdraw.selector);
+        vault.claimUnclaimed();
+    }
+
     // =====================================================================
     // Settle order
     // =====================================================================
@@ -724,6 +869,22 @@ contract CoverVaultPolicyTest is Test {
             }
         }
         assertTrue(found, "first log not emitted");
+    }
+
+    /// @dev Among the vault's own logs, `a`, `b`, `c` appear consecutively in this order
+    ///      (exactly once as a run).
+    function _assertLogSequence(bytes32 a, bytes32 b, bytes32 c) internal {
+        Vm.Log[] memory all = vm.getRecordedLogs();
+        bytes32[] memory topics = new bytes32[](all.length);
+        uint256 n;
+        for (uint256 i = 0; i < all.length; i++) {
+            if (all[i].emitter == address(vault)) topics[n++] = all[i].topics[0];
+        }
+        uint256 runs;
+        for (uint256 i = 0; i + 2 < n; i++) {
+            if (topics[i] == a && topics[i + 1] == b && topics[i + 2] == c) runs++;
+        }
+        assertEq(runs, 1, "log sequence");
     }
 
     /// @dev Resync the grid cursor to the accumulator's latest sample.

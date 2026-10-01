@@ -46,6 +46,11 @@
 #   POLL_SECS         live-mode polling period (default 5)
 #   ANVIL_STEP_DELAY  --anvil: real seconds to sleep after each time jump (default 0)
 #   RETRIES, RETRY_BACKOFF   RPC retry count / base backoff seconds (default 4 / 3)
+#   RECEIPT_WAIT      seconds to wait for a receipt before deciding whether a failed send
+#                     landed (default 60)
+#   KEEPER_MAX_FAILS  --keeper-only: consecutive failed ticks before giving up (default 5)
+#   KEEPER_BACKOFF, KEEPER_BACKOFF_MAX   --keeper-only: base / max seconds of the
+#                     exponential backoff after a failed tick (default RETRY_BACKOFF / 300)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -140,7 +145,13 @@ starts_at() { cast_call "$VAULT" "startsAt(uint32)(uint64)" "$1" | first; }
 ends_at() { cast_call "$VAULT" "endsAt(uint32)(uint64)" "$1" | first; }
 status_of() { cast_call "$VAULT" "statusOf(uint32)(uint8)" "$1" | first; }
 unclaimed_of() { cast_call "$VAULT" "unclaimed(address)(uint256)" "$1" | first; }
-next_poke_at() { echo $(($(cast_call "$ACC" "lastSampleAt()(uint32)" | first) + INTERVAL)); }
+# Fails (no output) on an empty read instead of scheduling at 0 + INTERVAL.
+next_poke_at() {
+  local last
+  last=$(cast_call "$ACC" "lastSampleAt()(uint32)" | first) || last=""
+  is_uint "$last" || { log "  WARN: lastSampleAt() read returned '${last}'"; return 1; }
+  echo $((last + INTERVAL))
+}
 
 pick_cohort() {
   local now n
@@ -155,7 +166,7 @@ DRIVE=0 SWING_DIR=0 POKES=0
 on_poke() { :; } # scenario hook, called with the poke number inside the drive window
 
 poke_now() {
-  ops "keeper-poke" "$SIGNER_KEEPER" "keeperPoke()"
+  ops "keeper-poke" "$SIGNER_KEEPER" "keeperPoke()" || return 1
   POKES=$((POKES + 1))
   if [ "$DRIVE" = 1 ]; then
     # Pay scenario: a large swing every interval, alternating direction, so every return
@@ -163,7 +174,7 @@ poke_now() {
     local z=true
     [ "$SWING_DIR" = 0 ] && z=false
     SWING_DIR=$((1 - SWING_DIR))
-    ops "swap" "$SIGNER_LP" "swap()" ARUNA_SWAP_IN="$SWAP_IN" ARUNA_ZERO_FOR_ONE="$z"
+    ops "swap" "$SIGNER_LP" "swap()" ARUNA_SWAP_IN="$SWAP_IN" ARUNA_ZERO_FOR_ONE="$z" || return 1
   fi
 }
 
@@ -173,7 +184,7 @@ advance_to() {
   local target="$1" due k=0
   if [ "${KEEP_POKING:-1}" = 1 ]; then
     while :; do
-      due=$(next_poke_at)
+      due=$(next_poke_at) || die "cannot schedule the next poke (empty chain read)"
       [ "$due" -lt "$target" ] || break
       wait_until "$due"
       poke_now
@@ -310,42 +321,105 @@ scenario_simple() { # nopay | refund
 }
 
 # Temporary keeper (Fase 2): poke on schedule; finalize and settle whatever is due.
-keeper_loop() {
-  local keeper c cur
-  keeper=$(cast wallet address $SIGNER_KEEPER)
-  log "keeper-only as $keeper"
-  while :; do
-    if [ "$UNTIL" != 0 ] && [ "$(chain_now)" -ge "$UNTIL" ]; then break; fi
-    if [ "$MAX_POKES" != 0 ] && [ "$POKES" -ge "$MAX_POKES" ]; then break; fi
-    wait_until "$(next_poke_at)"
-    poke_now
-    cur=$(cast_call "$VAULT" "currentCohortId()(uint32)" | first)
-    c=$((cur > 2 ? cur - 2 : 0))
-    while [ "$c" -le "$cur" ]; do
-      if [ "$(status_of "$c")" = 2 ]; then # SETTLING
-        if [ "$(cast_call "$VAULT" "keeperFinalize(uint32)(bool,uint256)" "$c" --from "$keeper" | first)" = true ]; then
-          ops "keeper-finalize" "$SIGNER_KEEPER" "keeperFinalize()" ARUNA_COHORT="$c"
-        fi
-        if cast call --rpc-url "$RPC_URL" --from "$keeper" "$VAULT" "settleBatch(uint32,uint32)" "$c" 50 >/dev/null 2>&1; then
-          ops "settle-batch" "$SIGNER_KEEPER" "settleBatch()" ARUNA_COHORT="$c"
-        fi
+# A tick's poke / finalize / settle failure is logged and the loop carries on; an empty
+# scheduling read skips the tick with a warning. Consecutive failed ticks back off
+# exponentially (KEEPER_BACKOFF doubling, capped at KEEPER_BACKOFF_MAX) and the keeper
+# gives up after KEEPER_MAX_FAILS of them. Insufficient funds stops it at once.
+KEEPER_MAX_FAILS="${KEEPER_MAX_FAILS:-5}" KEEPER_BACKOFF="${KEEPER_BACKOFF:-$RETRY_BACKOFF}"
+KEEPER_BACKOFF_MAX="${KEEPER_BACKOFF_MAX:-300}"
+
+# Note a failed keeper action; insufficient funds is fatal, the rest only fail the tick.
+keeper_action_failed() { # keeper_action_failed <what>
+  case "$OPS_ERR" in
+    funds) die "keeper $1: insufficient funds for gas; top up the keeper signer" ;;
+    nonce) log "  WARN: keeper $1: nonce conflict (a previous tx may still be pending); retrying next tick" ;;
+    price) log "  WARN: keeper $1: underpriced; fees are re-estimated next tick" ;;
+    *) log "  WARN: keeper $1 failed (${OPS_ERR:-unknown}); continuing" ;;
+  esac
+}
+
+# One keeper tick. Returns 1 if any action failed or a scheduling read came back empty.
+keeper_tick() { # keeper_tick <keeper-address>
+  local keeper="$1" due cur c st fin out ok=0
+  due=$(next_poke_at) || { log "  WARN: skipping tick: cannot schedule the next poke"; return 1; }
+  wait_until "$due" || { log "  WARN: skipping tick: cannot reach poke time $due"; return 1; }
+  poke_now || { keeper_action_failed poke; ok=1; }
+  cur=$(cast_call "$VAULT" "currentCohortId()(uint32)" | first) || cur=""
+  is_uint "$cur" || { log "  WARN: skipping finalize/settle: currentCohortId() read returned '${cur}'"; return 1; }
+  c=$((cur > 2 ? cur - 2 : 0))
+  while [ "$c" -le "$cur" ]; do
+    st=$(status_of "$c") || st=""
+    is_uint "$st" || { log "  WARN: skipping rest of tick: statusOf($c) read returned '${st}'"; return 1; }
+    if [ "$st" = 2 ]; then # SETTLING
+      fin=$(cast_call "$VAULT" "keeperFinalize(uint32)(bool,uint256)" "$c" --from "$keeper" | first) || fin=""
+      case "$fin" in
+        true) ops "keeper-finalize" "$SIGNER_KEEPER" "keeperFinalize()" ARUNA_COHORT="$c" \
+          || { keeper_action_failed "finalize($c)"; ok=1; } ;;
+        false) ;;
+        *) log "  WARN: keeperFinalize($c) simulation returned '${fin}'"; ok=1 ;;
+      esac
+      # A reverting simulation means nothing to settle; a transport error is a failed read.
+      if out=$(cast call --rpc-url "$RPC_URL" --from "$keeper" "$VAULT" "settleBatch(uint32,uint32)" "$c" 50 2>&1); then
+        ops "settle-batch" "$SIGNER_KEEPER" "settleBatch()" ARUNA_COHORT="$c" \
+          || { keeper_action_failed "settle($c)"; ok=1; }
+      elif is_rpc_error "$out"; then
+        log "  WARN: settleBatch($c) simulation: RPC error"; ok=1
       fi
-      c=$((c + 1))
-    done
+    fi
+    c=$((c + 1))
   done
+  return "$ok"
+}
+
+keeper_loop() {
+  local keeper now fails=0 backoff tick_ok
+  keeper=$(signer_address "$SIGNER_KEEPER") || die "cannot resolve the keeper signer address"
+  log "keeper-only as $keeper (max $KEEPER_MAX_FAILS consecutive failed ticks)"
+  OPS_SOFT=1
+  while :; do
+    if [ "$MAX_POKES" != 0 ] && [ "$POKES" -ge "$MAX_POKES" ]; then break; fi
+    tick_ok=1
+    if [ "$UNTIL" != 0 ] && ! now=$(chain_now_try); then
+      log "  WARN: skipping tick: cannot read chain time to check --until"
+      tick_ok=0
+    elif [ "$UNTIL" != 0 ] && [ "$now" -ge "$UNTIL" ]; then
+      break
+    elif ! keeper_tick "$keeper"; then
+      tick_ok=0
+    fi
+    if [ "$tick_ok" = 1 ]; then fails=0; continue; fi
+    fails=$((fails + 1))
+    [ "$fails" -lt "$KEEPER_MAX_FAILS" ] || { OPS_SOFT=0; die "keeper: $fails consecutive failed ticks"; }
+    backoff=$((KEEPER_BACKOFF << (fails - 1)))
+    [ "$backoff" -le "$KEEPER_BACKOFF_MAX" ] || backoff="$KEEPER_BACKOFF_MAX"
+    log "  WARN: tick failed ($fails/$KEEPER_MAX_FAILS consecutive); backing off ${backoff}s"
+    sleep "$backoff"
+  done
+  OPS_SOFT=0
 }
 
 # ---------------------------------------------------------------- main
+# The results file is finalized on every exit path: complete (exit 0), interrupted
+# (SIGINT/SIGTERM, e.g. stopping --keeper-only), failed (anything else, incl. set -e).
+on_exit() {
+  local rc=$?
+  case "$rc" in
+    0) finish_results complete; rm -rf "$WORK_DIR" ;;
+    130 | 143) finish_results interrupted ;;
+    *) finish_results failed ;;
+  esac
+  [ "$rc" = 0 ] || log "exit $rc; step logs kept in $WORK_DIR; results -> ${RESULTS_FILE:-none}"
+}
 init_results "$SCENARIO"
-trap 'finish_results failed' INT TERM
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 case "$SCENARIO" in
   pay) scenario_pay ;;
   nopay | refund) scenario_simple ;;
   keeper) keeper_loop ;;
 esac
-finish_results complete
 missing=$(jq '[.steps[] | select(.txHash == null or .txHash == "" or .status != 1)] | length' "$RESULTS_FILE")
 total=$(jq '.steps | length' "$RESULTS_FILE")
 log "done: $total transactions recorded, $missing without a successful receipt -> $RESULTS_FILE"
 [ "$missing" = 0 ] || exit 1
-rm -rf "$WORK_DIR"
