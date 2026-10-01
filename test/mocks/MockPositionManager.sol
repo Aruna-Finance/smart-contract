@@ -49,6 +49,8 @@ contract MockPositionManager is INonfungiblePositionManager {
     MockERC20 public feeToken0;
     MockERC20 public feeToken1;
     bool public transferFails;
+    /// @notice The Uniswap v3 factory this NFPM reports (`setFactory`).
+    address public factory;
 
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
@@ -103,6 +105,10 @@ contract MockPositionManager is INonfungiblePositionManager {
     function setFeeTokens(MockERC20 token0_, MockERC20 token1_) external {
         feeToken0 = token0_;
         feeToken1 = token1_;
+    }
+
+    function setFactory(address factory_) external {
+        factory = factory_;
     }
 
     function setTransferFails(bool fails) external {

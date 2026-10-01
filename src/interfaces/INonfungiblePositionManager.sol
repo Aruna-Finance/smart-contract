@@ -23,6 +23,10 @@ interface INonfungiblePositionManager {
 
     function ownerOf(uint256 tokenId) external view returns (address owner);
 
+    /// @notice The Uniswap v3 factory this NFPM is bound to. ArunaFactory resolves the
+    ///         canonical pool through it (plan "Arsitektur factory").
+    function factory() external view returns (address);
+
     /// @notice Returns the position's parameters. Aruna reads token0/token1/fee to
     ///         match the pool and liquidity/ticks for valuation; the rest is ignored.
     function positions(uint256 tokenId)
