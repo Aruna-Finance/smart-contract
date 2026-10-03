@@ -1,0 +1,40 @@
+{
+  "transactions": [
+    {
+      "hash": null,
+      "transactionType": "CALL",
+      "contractName": null,
+      "contractAddress": "0x7e14ef9e5ef153c3f0420bb80d13c1c7f7dda44f",
+      "function": "keeperPoke()",
+      "functionAbi": "function keeperPoke() returns (bool sampled, uint256 bounty)",
+      "arguments": [],
+      "transaction": {
+        "from": "0xfc500544ffdd008a687e0fe69080f060d44ba8ea",
+        "to": "0x7e14ef9e5ef153c3f0420bb80d13c1c7f7dda44f",
+        "gas": "0x2551f",
+        "value": "0x0",
+        "input": "0x23e11464",
+        "nonce": "0x34",
+        "chainId": "0x66eee"
+      },
+      "additionalContracts": [],
+      "isFixedGasLimit": false
+    }
+  ],
+  "receipts": [],
+  "libraries": [],
+  "pending": [],
+  "returns": {
+    "bounty": {
+      "internal_type": "uint256",
+      "value": "10000"
+    },
+    "sampled": {
+      "internal_type": "bool",
+      "value": "true"
+    }
+  },
+  "timestamp": 1791026375368,
+  "chain": 421614,
+  "commit": "01dc2fb"
+}
