@@ -1,0 +1,12 @@
+{
+  "blockNumber": 11837264,
+  "chainId": 421614,
+  "lp": "0xD9EBAD7507189b0F154b6EEd383E1b5FfcfaD10b",
+  "lpTokenIds": [
+    3833,
+    3834
+  ],
+  "receiverTokenId": 3835,
+  "rejectingReceiver": "0xD3aC7819438DF6fc311acAE6807DE137594D4C32",
+  "vault": "0x7E14ef9E5eF153c3f0420bB80d13c1c7f7DDA44F"
+}

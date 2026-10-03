@@ -1,0 +1,114 @@
+{
+  "aux": {
+    "rejectingReceiver_0": "0xf06ecCdB10B0002A15b54B77fB0054B1C15f767e",
+    "rejectingReceiver_1": "0xbd47CF97cF9ba9c1371f3ee7DAA7A2788ABBBAc7",
+    "rejectingReceiver_2": "0xE0BC45666AcF4E75dcBfD6f207e9CfDE75039297",
+    "rejectingReceiver_3": "0xD3aC7819438DF6fc311acAE6807DE137594D4C32"
+  },
+  "blockNumber": 11834049,
+  "chainId": 421614,
+  "contracts": {
+    "AccumulatorDeployer": "0xB871882C0F5B21267357F9414820913Ae998281e",
+    "ArunaFactory": "0xA3547B68205794969e8A5229Ab55c2212F6eA472",
+    "VaultDeployer": "0x3F55a967597A500A6A1AeC06b472d6dd6c2781c0"
+  },
+  "deployer": "0x91e038De7435DBd2eA550e27F756CD406f414523",
+  "factoryArgs": {
+    "accumulatorDeployer": "0xB871882C0F5B21267357F9414820913Ae998281e",
+    "allowedTenors": [
+      3600
+    ],
+    "gap": 600,
+    "maxFinalizeBounty": "5000000",
+    "maxKeeperShareBps": 1000,
+    "maxPokeBounty": "1000000",
+    "maxSettleBounty": "2000000",
+    "positionManager": "0x6b2937Bde17889EDCf8fbD8dE31C3C2a70Bc4d65",
+    "sampleInterval": 60,
+    "settlementToken": "0x29Fccf6C04D4d02c9ea4336c75F84145299c82cA",
+    "vaultDeployer": "0x3F55a967597A500A6A1AeC06b472d6dd6c2781c0"
+  },
+  "gitCommit": "01dc2fbfe3a4f2c34e3ba8813a130ff7002ad928",
+  "infra": {
+    "positionManager": "0x6b2937Bde17889EDCf8fbD8dE31C3C2a70Bc4d65",
+    "router": "0x101F443B4d1b059569D643917553c771E1b9663E",
+    "settlementToken": "0x29Fccf6C04D4d02c9ea4336c75F84145299c82cA",
+    "uniswapV3Factory": "0x248AB79Bbb9bC29bB72f7Cd42F17e054Fc40188e"
+  },
+  "initCodeHashes": {
+    "AccumulatorDeployer": "0x8255e9fc60a423b0391ebbbad68dc9fb05b8cedf3c89163796b461ca730b89c7",
+    "ArunaFactory": "0xb26e54617e6d57dfb1a4d190948d5cb4d070020b1f6809a6940709d1f455d7cd",
+    "CoverVault": "0x17f17708b479232a35f231c1eedf5a03bc2ba835b34e7b2cea0c40c24d4a8919",
+    "FlatVegaPricer": "0x8591cc2391caa8ce78f7a87c7856a43940f153f4bc580d92531b8d7d1f3a1384",
+    "PositionValuer": "0xe08eb10c601f93b74b242117a712de4d7a54531cb85adacd241b54cd7f3ac9b7",
+    "VarianceAccumulator": "0xf8d07ebe3b956122967529babbcf3e5f75b0e57419558ea7c905b96551949824",
+    "VaultDeployer": "0x3237743ccd2bbd078b6d910d936df782b76e3010bc1fa30341eaf37f77299699"
+  },
+  "label": "sandbox",
+  "markets": {
+    "0": {
+      "accumulator": "0xcEF5c3CdF6dd303b522E047ff1376a0F78885c47",
+      "anchor": 1791009299,
+      "blockNumber": 11834063,
+      "calibration": {
+        "artifact": "sandbox-placeholder",
+        "placeholder": true
+      },
+      "deployer": "0x91e038De7435DBd2eA550e27F756CD406f414523",
+      "factory": "0xA3547B68205794969e8A5229Ab55c2212F6eA472",
+      "keeperBudgetFunded": "450000000",
+      "params": {
+        "anchor": 1791009299,
+        "ewmaAlphaBps": 2000,
+        "finalizeBounty": "50000",
+        "keeperShareBps": 500,
+        "maxExcessVariance": "2000000000000000000",
+        "maxUtilizationBps": 8000,
+        "pokeBounty": "10000",
+        "policyCap": 20,
+        "pool": "0x0ae57A2751E50597c8a3C183AEbCF115F057d408",
+        "pricer": "0xd2e17AcD143a2Bea3b678d9d110Fe5f2443246FC",
+        "seedVariance": "500000000000000000",
+        "settleBounty": "20000",
+        "tenor": 3600,
+        "valuer": "0xef7022e17c5c26dB9273AfCD0E22A552c41198e2"
+      },
+      "pool": "0x0ae57A2751E50597c8a3C183AEbCF115F057d408",
+      "pricer": "0xd2e17AcD143a2Bea3b678d9d110Fe5f2443246FC",
+      "pricerArgs": {
+        "gKnots": [
+          "1000000000000000000",
+          "600000000000000000",
+          "350000000000000000",
+          "150000000000000000",
+          "50000000000000000"
+        ],
+        "lambda": "500000000000000000",
+        "loadBps": 1000,
+        "mKnots": [
+          "0",
+          "500000000000000000",
+          "1000000000000000000",
+          "2000000000000000000",
+          "4000000000000000000"
+        ],
+        "minPremium": "1000000"
+      },
+      "tenor": 3600,
+      "timestamp": 1791008699,
+      "valuer": "0xef7022e17c5c26dB9273AfCD0E22A552c41198e2",
+      "valuerArgs": {
+        "kappa": "1000000000000000000",
+        "maxWidthMult": "4000000000000000000",
+        "minWidthMult": "250000000000000000",
+        "positionManager": "0x6b2937Bde17889EDCf8fbD8dE31C3C2a70Bc4d65",
+        "refWidth": 2000
+      },
+      "vault": "0x7E14ef9E5eF153c3f0420bB80d13c1c7f7DDA44F"
+    }
+  },
+  "profile": "sandbox",
+  "rcManifest": "",
+  "schema": "aruna-deployment/1",
+  "timestamp": 1791008526
+}
