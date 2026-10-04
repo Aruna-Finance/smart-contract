@@ -1,8 +1,8 @@
 {
   "schema": "aruna-conformance/1",
   "status": "pending",
-  "rcManifest": null,
-  "updatedAt": "2026-10-01",
+  "rcManifest": "deployments/421614/sandbox.json",
+  "updatedAt": "2026-10-04",
   "sources": {
     "audit": "docs/audit/2026-09-30-smart-contract.md",
     "origin": "docs/brainstorms/2026-09-30-aruna-v2-release-requirements.md",
@@ -13,7 +13,9 @@
     {
       "id": "SC-01",
       "kind": "bug",
-      "requirements": ["R1"],
+      "requirements": [
+        "R1"
+      ],
       "description": "withdraw() saat FUNDING mengurangi totalCapital; kapasitas dan pembagian premi/klaim dihitung dari modal nyata. I3 bentuk baru terbukti gagal pada harness v0.",
       "tests": [
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_Spec_SC01_FundingWithdrawReducesCapital_AE1",
@@ -27,7 +29,10 @@
     {
       "id": "SC-02",
       "kind": "bug",
-      "requirements": ["R2", "R3"],
+      "requirements": [
+        "R2",
+        "R3"
+      ],
       "description": "Jendela polis dimulai dari sampel segar yang diambil saat beli (poke-on-touch + burn-in), bukan dari sampel terakhir yang basi.",
       "tests": [
         "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE2_StaleSampleJumpBeforeBuy_Excluded",
@@ -39,7 +44,9 @@
     {
       "id": "SC-03",
       "kind": "bug",
-      "requirements": ["R12"],
+      "requirements": [
+        "R12"
+      ],
       "description": "finalize tidak pernah macet: tanpa sampel sebelum startsAt atau tanpa sampel sama sekali, cohort tetap final dan modal bisa ditarik; polis tak terukur di-refund.",
       "tests": [
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_Spec_SC03_FinalizeWithoutSampleBeforeStart_AE5",
@@ -52,7 +59,11 @@
     {
       "id": "SC-04",
       "kind": "decision",
-      "requirements": ["R8", "R9", "R11"],
+      "requirements": [
+        "R8",
+        "R9",
+        "R11"
+      ],
       "decisionRef": "origin Key Decisions: \"Jeda settlement di luar tenor\" dan \"Kalender berbasis waktu, bukan peristiwa\" (docs/brainstorms/2026-09-30-aruna-v2-release-requirements.md)",
       "description": "Kalender dengan jeda settlement: rollTo(n, n+1) mungkin selama jeda; settle telat setelah startsAt(n+1) hanya bisa roll ke n+2.",
       "tests": [
@@ -67,7 +78,9 @@
     {
       "id": "SC-05",
       "kind": "decision",
-      "requirements": ["R10"],
+      "requirements": [
+        "R10"
+      ],
       "decisionRef": "origin Key Decisions: \"Jeda settlement di luar tenor\" (σ̂² cohort n+1 dikunci di jeda) (docs/brainstorms/2026-09-30-aruna-v2-release-requirements.md)",
       "description": "σ̂² untuk cohort n+1 di-snapshot deterministik sebelum n+1 mulai; finalize kemudian tidak bisa mengubah harga di tengah cohort.",
       "tests": [
@@ -82,7 +95,10 @@
     {
       "id": "SC-06",
       "kind": "bug",
-      "requirements": ["R4", "R23"],
+      "requirements": [
+        "R4",
+        "R23"
+      ],
       "description": "Interval sampel accumulator adalah konstanta factory (bukan pilihan pembuat market); jendela TWAP terpisah dihapus. Profil rilis memakai sampel 30 menit.",
       "tests": [
         "test/ArunaFactory.t.sol:ArunaFactoryTest:test_Constructor_ExposesConfig",
@@ -97,7 +113,9 @@
     {
       "id": "SC-07",
       "kind": "bug",
-      "requirements": ["R4"],
+      "requirements": [
+        "R4"
+      ],
       "description": "avgTick = TWAP antar-sampel dari delta tickCumulative (observe([0])), pembulatan floor ala OracleLibrary; tidak butuh cardinality tambahan.",
       "tests": [
         "test/VarianceAccumulator.t.sol:VarianceAccumulatorTest:test_OneStepTickChange_ExactVariance",
@@ -112,7 +130,9 @@
     {
       "id": "SC-08",
       "kind": "unbuilt",
-      "requirements": ["R27"],
+      "requirements": [
+        "R27"
+      ],
       "description": "Uji replay/fork atas data tick asli dan integrasi VarianceAccumulator asli + CoverVault. Integrasi komponen asli sudah hijau; replay fork WETH/USDC Arbitrum One dilewati tanpa RPC.",
       "tests": [
         "test/Integration.t.sol:IntegrationTest:test_Integration_SwingsReturningToStart_PayOut",
@@ -127,7 +147,9 @@
     {
       "id": "SC-09",
       "kind": "unbuilt",
-      "requirements": ["R30"],
+      "requirements": [
+        "R30"
+      ],
       "description": "Artefak kalibrasi: kontrak tidak memanggang angka kalibrasi; premi bergantung pada strike, sisa waktu, dan utilisasi; DeployMarket rilis menolak kalibrasi placeholder. Artefak bertanggal sendiri adalah keluaran ide #4 (gerbang R30 di DeployMarket).",
       "tests": [
         "test/FlatVegaPricer.t.sol:FlatVegaPricerTest:test_HigherStrike_IsCheaper",
@@ -141,7 +163,11 @@
     {
       "id": "SC-10",
       "kind": "unbuilt",
-      "requirements": ["R19", "R20", "R21"],
+      "requirements": [
+        "R19",
+        "R20",
+        "R21"
+      ],
       "description": "keeperBudget ada di vault: porsi premi ditanggung underwriter, bounty hanya saat state berubah, budget masuk invariant solvabilitas. Bot keeper off-chain adalah ide #3; siklus tanpa campur tangan dibuktikan di baris RC-KEEPER-CYCLE.",
       "tests": [
         "test/CoverVaultKeeper.t.sol:CoverVaultKeeperTest:test_Poke_AfterInterval_PaysAndBudgetDecreases",
@@ -156,7 +182,10 @@
     {
       "id": "SC-11",
       "kind": "unbuilt",
-      "requirements": ["R4", "R12"],
+      "requirements": [
+        "R4",
+        "R12"
+      ],
       "description": "Penanda degraded ada (celah sampel per jendela); backfill poke(uint32[]) resmi dihapus; cardinality tidak perlu dinaikkan karena TWAP antar-sampel.",
       "tests": [
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_AE6_GapAboveThreshold_Degraded_PayoutStillComputed",
@@ -170,7 +199,10 @@
     {
       "id": "SC-12",
       "kind": "unbuilt",
-      "requirements": ["R23", "R24"],
+      "requirements": [
+        "R23",
+        "R24"
+      ],
       "description": "Pagar factory: tenor dibatasi set factory ({7,14,28} hari di rilis) dan batas polis hidup per cohort. Ambang likuiditas pool sengaja tidak ditegakkan on-chain (R24, scope).",
       "tests": [
         "test/ArunaFactory.t.sol:ArunaFactoryTest:test_ReleaseFactory_Rejects10DayTenor",
@@ -185,7 +217,11 @@
     {
       "id": "SC-13",
       "kind": "decision",
-      "requirements": ["R22", "R23", "R25"],
+      "requirements": [
+        "R22",
+        "R23",
+        "R25"
+      ],
       "decisionRef": "origin Key Decisions: \"Tanpa slot kanonik, parameter kritis jadi konstanta factory\" (docs/brainstorms/2026-09-30-aruna-v2-release-requirements.md)",
       "description": "Factory permissionless tanpa slot unik per (pool, tenor); market kedua berdiri terpisah; pool palsu ditolak; VaultCreated memuat semua parameter untuk kurasi off-chain.",
       "tests": [
@@ -200,7 +236,12 @@
     {
       "id": "SC-14",
       "kind": "decision",
-      "requirements": ["R13", "R14", "R15", "R18"],
+      "requirements": [
+        "R13",
+        "R14",
+        "R15",
+        "R18"
+      ],
       "decisionRef": "origin Key Decisions: \"NFT dititipkan, bukan dipotong di settlement\" (docs/brainstorms/2026-09-30-aruna-v2-release-requirements.md)",
       "description": "NFT posisi dititipkan ke vault selama proteksi: likuiditas tidak bisa ditarik, fee tetap bisa diambil pemilik polis, satu posisi satu polis aktif.",
       "tests": [
@@ -216,7 +257,9 @@
     {
       "id": "SC-15",
       "kind": "bug",
-      "requirements": ["R5"],
+      "requirements": [
+        "R5"
+      ],
       "description": "Dust pembulatan dan transfer langsung menjadi residual yang dibawa/disapu, sehingga setiap wei punya pemilik.",
       "tests": [
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_Dust_BecomesResidualOnlyAfterAllExit_ThenSwept",
@@ -228,7 +271,10 @@
     {
       "id": "SC-16",
       "kind": "bug",
-      "requirements": ["R6", "R24"],
+      "requirements": [
+        "R6",
+        "R24"
+      ],
       "description": "Cohort tanpa modal tidak menjual cover dan langsung SETTLED; posisi tanpa likuiditas ditolak; maxPayout minimum per polis.",
       "tests": [
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_ZeroCapitalCohort",
@@ -242,7 +288,9 @@
     {
       "id": "SC-17",
       "kind": "bug",
-      "requirements": ["R7"],
+      "requirements": [
+        "R7"
+      ],
       "description": "statusOf turunan waktu: cohort lewat endsAt tidak lagi tampil ACTIVE (SETTLING sampai final).",
       "tests": [
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_Status_SettlingAfterEndsAt",
@@ -254,7 +302,9 @@
     {
       "id": "SC-18",
       "kind": "doc",
-      "requirements": ["R32"],
+      "requirements": [
+        "R32"
+      ],
       "description": "Inkonsistensi internal DSN/INT (13 sub-temuan a-m): direkonsiliasi ke kode v2 sebagai kanon nama.",
       "mapsTo": "U11",
       "tests": [],
@@ -265,7 +315,9 @@
     {
       "id": "SC-19",
       "kind": "bug",
-      "requirements": ["R9"],
+      "requirements": [
+        "R9"
+      ],
       "description": "Anchor kalender adalah input eksplisit per market: DeployMarket rilis menolak tanpa ARUNA_ANCHOR eksplisit; sandbox memakai now + lead. Kalender startsAt(n) = anchor + n·(tenor + jeda).",
       "tests": [
         "test/script/Deploy.t.sol:DeployScriptTest:test_DeployMarket_Release_PlaceholderCalibration_Reverts",
@@ -278,7 +330,9 @@
     {
       "id": "SC-20",
       "kind": "bug",
-      "requirements": ["R28"],
+      "requirements": [
+        "R28"
+      ],
       "description": "Compiler dipatok solc 0.8.26 tanpa metadata hash/CBOR (foundry.toml), sehingga init code hash reprodusibel dan tercatat di manifest.",
       "tests": [
         "test/script/Deploy.t.sol:DeployScriptTest:test_DeployFactory_Sandbox_WritesManifestWithBuildHashes"
@@ -290,7 +344,9 @@
     {
       "id": "SC-21",
       "kind": "out-of-spec",
-      "requirements": ["R32"],
+      "requirements": [
+        "R32"
+      ],
       "description": "Kode/aset di luar spek (event Poked/Withdrawn/Rolled/Finalized/Unclaimed/Claimed, view statusOf/currentCohortId/policyCount, claimUnclaimed, ewmaAlphaBps/seedVariance, PUSH_GAS, tooling testnet) diangkat ke spek: desain §4.1/§4.3/§6.3/§7.3/§8 (2026-10-01, U11) dan perilakunya diuji di v2. Vault uji 1 jam v0 ditandai known-bug (R31) dan tidak didaftarkan.",
       "mapsTo": "U11",
       "tests": [
@@ -303,7 +359,10 @@
     {
       "id": "SC-22",
       "kind": "doc",
-      "requirements": ["R28", "R29"],
+      "requirements": [
+        "R28",
+        "R29"
+      ],
       "description": "Kebersihan repo dan reproduktibilitas: fmt --check dan gerbang ukuran di CI, README v2, skrip deploy/ops untuk setiap aksi rantai §8 dengan manifest sebagai sumber alamat. Broadcast RC di-commit bersama hasil runner setelah Fase 2.",
       "tests": [
         "test/script/Deploy.t.sol:DeployScriptTest:test_DeployFactory_Sandbox_WritesManifestWithBuildHashes",
@@ -316,7 +375,9 @@
     {
       "id": "SC-23",
       "kind": "unbuilt",
-      "requirements": ["R27"],
+      "requirements": [
+        "R27"
+      ],
       "description": "Celah tes ditutup: rollTo, claimUnclaimed, penerima yang menolak transfer, polis debu massal (anti-farm), setiap baris tabel §7.5, handler invariant memanggil roll/claim, I3 sebagai saldo ≥ kewajiban.",
       "tests": [
         "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I3_balanceCoversObligations",
@@ -335,7 +396,9 @@
     {
       "id": "SC-24",
       "kind": "doc",
-      "requirements": ["R32"],
+      "requirements": [
+        "R32"
+      ],
       "description": "Nama dan bentuk ABI di INT berbeda dari kode (getter, factory, event, NFPM, chain, alamat): INT disinkronkan ke ABI v2.",
       "mapsTo": "U11",
       "tests": [],
@@ -346,7 +409,10 @@
     {
       "id": "I1",
       "kind": "invariant",
-      "requirements": ["R1", "R27"],
+      "requirements": [
+        "R1",
+        "R27"
+      ],
       "description": "Kapasitas: reserved ≤ totalCapital × utilisasi dan sama dengan Σ maxPayout polis aktif.",
       "tests": [
         "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I1_reservedWithinCapacity",
@@ -358,16 +424,23 @@
     {
       "id": "I2",
       "kind": "invariant",
-      "requirements": ["R27"],
+      "requirements": [
+        "R27"
+      ],
       "description": "Payout ≤ maxPayout per polis.",
-      "tests": ["test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I2_payoutWithinMaxPayout"],
+      "tests": [
+        "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I2_payoutWithinMaxPayout"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "I3",
       "kind": "invariant",
-      "requirements": ["R21", "R27"],
+      "requirements": [
+        "R21",
+        "R27"
+      ],
       "description": "Solvabilitas: saldo token ≥ semua kewajiban (modal, premi, payout parkir, refund, budget keeper, residual); terbukti tidak vakum terhadap SC-01.",
       "tests": [
         "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I3_balanceCoversObligations",
@@ -380,52 +453,81 @@
     {
       "id": "I4",
       "kind": "invariant",
-      "requirements": ["R13", "R27"],
+      "requirements": [
+        "R13",
+        "R27"
+      ],
       "description": "Tidak ada debit ke LP selain premi saat beli; NFT hanya di pemilik, escrow vault, atau parkir milik pemilik.",
-      "tests": ["test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I4_noDebitAndNftOnlyWithOwnerOrVault"],
+      "tests": [
+        "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I4_noDebitAndNftOnlyWithOwnerOrVault"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "I5",
       "kind": "invariant",
-      "requirements": ["R10", "R27"],
+      "requirements": [
+        "R10",
+        "R27"
+      ],
       "description": "Monoton: status dan nilai yang sudah ditetapkan tidak mundur/berubah (termasuk snapshot harga dan varNotional).",
-      "tests": ["test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I5_monotone"],
+      "tests": [
+        "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I5_monotone"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "I6",
       "kind": "invariant",
-      "requirements": ["R21", "R27"],
+      "requirements": [
+        "R21",
+        "R27"
+      ],
       "description": "Tidak ada uang tercipta, termasuk potongan keeper dan bounty.",
-      "tests": ["test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I6_noMoneyCreated"],
+      "tests": [
+        "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I6_noMoneyCreated"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "I7",
       "kind": "invariant",
-      "requirements": ["R12", "R27"],
+      "requirements": [
+        "R12",
+        "R27"
+      ],
       "description": "Cohort tuntas → semua polis berstatus akhir dan reserved nol.",
-      "tests": ["test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I7_resolvedImpliesAllFinal"],
+      "tests": [
+        "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I7_resolvedImpliesAllFinal"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "I8",
       "kind": "invariant",
-      "requirements": ["R13", "R15", "R27"],
+      "requirements": [
+        "R13",
+        "R15",
+        "R27"
+      ],
       "description": "Setiap polis aktif punya NFT posisinya di vault.",
-      "tests": ["test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I8_activePolicyNftInVault"],
+      "tests": [
+        "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I8_activePolicyNftInVault"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "I-KEEPER",
       "kind": "invariant",
-      "requirements": ["R20", "R21"],
+      "requirements": [
+        "R20",
+        "R21"
+      ],
       "description": "Invariant bounty: total bounty terbayar ≤ budget keeper yang pernah masuk.",
       "tests": [
         "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_Keeper_BountiesWithinInflows",
@@ -438,81 +540,138 @@
       "id": "CH-1",
       "kind": "chain",
       "lifecycle": true,
-      "requirements": ["R1", "R26"],
+      "requirements": [
+        "R1",
+        "R26"
+      ],
       "description": "SSOT §8 #1: underwriter menyetor modal ke vault suatu pool.",
       "tests": [
         "test/CoverVault.t.sol:CoverVaultTest:test_HappyPath_ConservesFunds",
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_Spec_SC01_FundingWithdrawReducesCapital_AE1"
       ],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Menunggu Fase 2: transaksi deposit dari runner RC (runner/run.sh) di Arbitrum Sepolia."
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0x8deed6edf9aa998c4500e3f8d06bf6dd4200df2ec2f0048643ae81325040d8d1",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315408951
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "CH-2",
       "kind": "chain",
       "lifecycle": true,
-      "requirements": ["R2", "R26"],
+      "requirements": [
+        "R2",
+        "R26"
+      ],
       "description": "SSOT §8 #2: LP melihat premi untuk posisinya berdasarkan strike dan sisa waktu cohort.",
       "tests": [
         "test/FlatVegaPricer.t.sol:FlatVegaPricerTest:test_HigherStrike_IsCheaper",
         "test/FlatVegaPricer.t.sol:FlatVegaPricerTest:testFuzz_MonotonicIn_CoveredSeconds",
         "test/FlatVegaPricer.t.sol:FlatVegaPricerTest:testFuzz_NonIncreasingIn_Strike"
       ],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Menunggu Fase 2: transaksi buyCover RC yang premi (event CoverBought) menunjukkan ketergantungan strike/sisa waktu."
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0xa7c885f7cdf3ca4f9bf6bbd795ad0931d401f2c4de4f9c68422436b315179208",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315410624
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "CH-3",
       "kind": "chain",
       "lifecycle": true,
-      "requirements": ["R13", "R26"],
+      "requirements": [
+        "R13",
+        "R26"
+      ],
       "description": "SSOT §8 #3: LP membayar premi, proteksi terbuka, rugi maksimal terkunci (maxPayout ≤ kapasitas).",
       "tests": [
         "test/CoverVault.t.sol:CoverVaultTest:test_BuyCover_RevertsOnCapacity",
         "test/CoverVault.t.sol:CoverVaultTest:test_BuyCover_RevertsOnPremiumTooHigh",
         "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I2_payoutWithinMaxPayout"
       ],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Menunggu Fase 2: transaksi approveAndBuy dari runner RC."
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0x903ca5db80601d2ddd8299a37f8b429f55f07b4ca5477aa3a6ab83fa41b4c9e5",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315410833
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "CH-4",
       "kind": "chain",
       "lifecycle": true,
-      "requirements": ["R3", "R4", "R26"],
+      "requirements": [
+        "R3",
+        "R4",
+        "R26"
+      ],
       "description": "SSOT §8 #4: kontrak mengakumulasi realized variance dari TWAP selama siklus.",
       "tests": [
         "test/VarianceAccumulator.t.sol:VarianceAccumulatorTest:test_OneStepTickChange_ExactVariance",
         "test/VarianceAccumulator.t.sol:VarianceAccumulatorTest:test_SymmetricRoundTrip_AccumulatesNotNets",
         "test/Integration.t.sol:IntegrationTest:test_Integration_SwingsReturningToStart_PayOut"
       ],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Menunggu Fase 2: transaksi keeperPoke RC di pool bot mirror."
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0x228a0dc0d75a01d1c092f3f5c1e3fb97476ecc52d1736f749bf2fb9ec1c2e3e3",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315409492
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "CH-5",
       "kind": "chain",
       "lifecycle": true,
-      "requirements": ["R12", "R17", "R26"],
+      "requirements": [
+        "R12",
+        "R17",
+        "R26"
+      ],
       "description": "SSOT §8 #5: settlement serentak di akhir siklus; LP menang menerima payout (sesuai cap), LP kalah rugi = premi.",
       "tests": [
         "test/Integration.t.sol:IntegrationTest:test_Integration_SwingsReturningToStart_PayOut",
         "test/Integration.t.sol:IntegrationTest:test_Integration_FlatPrice_PaysZero",
         "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_SettleBatch_SkipsFinal_ThenResolves"
       ],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Menunggu Fase 2: transaksi keeperFinalize + settleBatch RC."
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0x54bf3a447237267e50660e849ac06829a014f4f3bc19d40b86f4014c27d02320",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315425140
+        },
+        {
+          "network": 421614,
+          "hash": "0x67d85bdc215d53478ffc4ccd9e5535dbc75872a4798aadee089b2c1ce3b3a93e",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315425293
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "CH-6",
       "kind": "chain",
       "lifecycle": true,
-      "requirements": ["R1", "R11", "R26"],
+      "requirements": [
+        "R1",
+        "R11",
+        "R26"
+      ],
       "description": "SSOT §8 #6: underwriter menerima modal + premi − klaim, proporsional porsi modal (withdraw / rollTo).",
       "tests": [
         "test/CoverVault.t.sol:CoverVaultTest:test_HappyPath_ConservesFunds",
@@ -520,23 +679,42 @@
         "test/CoverVaultKeeper.t.sol:CoverVaultKeeperTest:test_Skim_ReducesUnderwriterPremiumShareExactly",
         "test/CoverVaultInvariants.t.sol:CoverVaultInvariants:invariant_I6_noMoneyCreated"
       ],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Menunggu Fase 2: transaksi withdraw dan rollTo RC."
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0x2cb66f77bb4ae176e22960bbac3c5f05219883ede374408046fb05a9de3a3f66",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315425593
+        },
+        {
+          "network": 421614,
+          "hash": "0xf7e7ac362cb95242e3840f4901fd614948860aebec49e8c8bc6965050fd5b008",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315425695
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "AE1",
       "kind": "acceptance",
-      "requirements": ["R1"],
+      "requirements": [
+        "R1"
+      ],
       "description": "6.000 + 4.000 disetor, 6.000 ditarik saat FUNDING → modal cohort 4.000; cover tidak bisa melebihi 4.000 × batas utilisasi.",
-      "tests": ["test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_Spec_SC01_FundingWithdrawReducesCapital_AE1"],
+      "tests": [
+        "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_Spec_SC01_FundingWithdrawReducesCapital_AE1"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "AE2",
       "kind": "acceptance",
-      "requirements": ["R2", "R3"],
+      "requirements": [
+        "R2",
+        "R3"
+      ],
       "description": "Sampel terakhir basi 10 jam dan harga bergerak 10% → sampel baru diambil saat beli; pergerakan itu tidak masuk jendela polis.",
       "tests": [
         "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE2_StaleSampleJumpBeforeBuy_Excluded",
@@ -548,7 +726,12 @@
     {
       "id": "AE3",
       "kind": "acceptance",
-      "requirements": ["R8", "R9", "R10", "R11"],
+      "requirements": [
+        "R8",
+        "R9",
+        "R10",
+        "R11"
+      ],
       "description": "Cohort n di-settle dalam jeda → roll ke n+1; σ̂² n+1 terkunci sebelum n+1 mulai.",
       "tests": [
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_Spec_SC04_RollToNextDuringGap_AE3",
@@ -560,16 +743,23 @@
     {
       "id": "AE4",
       "kind": "acceptance",
-      "requirements": ["R9", "R11"],
+      "requirements": [
+        "R9",
+        "R11"
+      ],
       "description": "Settlement n selesai setelah jeda habis → n+1 tetap mulai sesuai jadwal; underwriter hanya bisa tarik atau roll ke n+2.",
-      "tests": ["test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_AE4_LateSettle_RollsToNPlus2"],
+      "tests": [
+        "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_AE4_LateSettle_RollsToNPlus2"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "AE5",
       "kind": "acceptance",
-      "requirements": ["R12"],
+      "requirements": [
+        "R12"
+      ],
       "description": "Tanpa sampel di jendela polis → payout nol, premi kembali, NFT kembali, underwriter tetap bisa menarik; tidak ada revert permanen.",
       "tests": [
         "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE5_PolicyRefund",
@@ -582,16 +772,24 @@
     {
       "id": "AE6",
       "kind": "acceptance",
-      "requirements": ["R12"],
+      "requirements": [
+        "R12"
+      ],
       "description": "Sampel dengan celah panjang → diukur dari sampel yang ada, cohort ditandai degraded, premi tidak dikembalikan.",
-      "tests": ["test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_AE6_GapAboveThreshold_Degraded_PayoutStillComputed"],
+      "tests": [
+        "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_AE6_GapAboveThreshold_Degraded_PayoutStillComputed"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "AE7",
       "kind": "acceptance",
-      "requirements": ["R13", "R14", "R15"],
+      "requirements": [
+        "R13",
+        "R14",
+        "R15"
+      ],
       "description": "NFT di vault; LP tidak bisa menarik likuiditas tapi bisa mengambil fee kapan saja.",
       "tests": [
         "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE7_Escrow_OnlyOwnerCollectsToChosenRecipient",
@@ -603,16 +801,22 @@
     {
       "id": "AE8",
       "kind": "acceptance",
-      "requirements": ["R16"],
+      "requirements": [
+        "R16"
+      ],
       "description": "Batal di hari ke-3 → NFT kembali, tanpa payout/refund premi, kapasitas bisa dijual lagi.",
-      "tests": ["test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE8_CancelDay3_FreesCapacityAndSlot_PremiumStays"],
+      "tests": [
+        "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE8_CancelDay3_FreesCapacityAndSlot_PremiumStays"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "AE9",
       "kind": "acceptance",
-      "requirements": ["R17"],
+      "requirements": [
+        "R17"
+      ],
       "description": "Penerima yang menolak transfer → polis lain tetap settle; payout dan NFT bisa diambil belakangan.",
       "tests": [
         "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE9_RejectingReceiver_PayoutParked_NftDelivered",
@@ -624,7 +828,9 @@
     {
       "id": "AE10",
       "kind": "acceptance",
-      "requirements": ["R20"],
+      "requirements": [
+        "R20"
+      ],
       "description": "Poke sebelum interval atau finalisasi ulang → tidak ada bounty.",
       "tests": [
         "test/CoverVaultKeeper.t.sol:CoverVaultKeeperTest:test_AE10_PokeBeforeInterval_NoBounty",
@@ -636,7 +842,10 @@
     {
       "id": "AE11",
       "kind": "acceptance",
-      "requirements": ["R22", "R23"],
+      "requirements": [
+        "R22",
+        "R23"
+      ],
       "description": "Market kedua untuk (pool, tenor) yang sama berhasil terpisah; tenor 10 hari ditolak factory rilis.",
       "tests": [
         "test/ArunaFactory.t.sol:ArunaFactoryTest:test_AE11_SecondMarketSamePair_Succeeds",
@@ -648,7 +857,11 @@
     {
       "id": "AE12",
       "kind": "acceptance",
-      "requirements": ["R28", "R29", "R30"],
+      "requirements": [
+        "R28",
+        "R29",
+        "R30"
+      ],
       "description": "Baris ledger merah menahan rilis: DeployFactory rilis menolak ledger yang tidak green, ledger untuk RC lain, atau bytecode yang berbeda dari RC. Pengecek ledger menolak baris hijau yang tesnya hilang/gagal (conformance/tests).",
       "tests": [
         "test/script/Deploy.t.sol:DeployScriptTest:test_DeployFactory_Release_LedgerNotGreen_Reverts",
@@ -664,21 +877,31 @@
       "id": "RC-PAY",
       "kind": "rc-scenario",
       "lifecycle": true,
-      "requirements": ["R29"],
+      "requirements": [
+        "R29"
+      ],
       "description": "Skenario RC: LP dibayar (swing harga besar, runner --scenario pay).",
       "tests": [
         "test/Integration.t.sol:IntegrationTest:test_Integration_SwingsReturningToStart_PayOut",
         "test/CoverVaultInvariants.t.sol:CoverVaultInvariantsDirected:test_Lifecycle_PayoutHappens"
       ],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Fase 2 (RC di Arbitrum Sepolia) belum dijalankan."
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0x54bf3a447237267e50660e849ac06829a014f4f3bc19d40b86f4014c27d02320",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315425140
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "RC-NOPAY",
       "kind": "rc-scenario",
       "lifecycle": true,
-      "requirements": ["R29"],
+      "requirements": [
+        "R29"
+      ],
       "description": "Skenario RC: LP tidak dibayar (harga diam, terukur, payout 0; runner --scenario nopay).",
       "tests": [
         "test/Integration.t.sol:IntegrationTest:test_Integration_FlatPrice_PaysZero",
@@ -692,7 +915,10 @@
       "id": "RC-REFUND",
       "kind": "rc-scenario",
       "lifecycle": true,
-      "requirements": ["R12", "R29"],
+      "requirements": [
+        "R12",
+        "R29"
+      ],
       "description": "Skenario RC: data kurang → premi di-refund (runner --scenario refund).",
       "tests": [
         "test/Integration.t.sol:IntegrationTest:test_Integration_NoSamplesInWindow_Refund",
@@ -706,69 +932,130 @@
       "id": "RC-ROLL-N1",
       "kind": "rc-scenario",
       "lifecycle": true,
-      "requirements": ["R11", "R29"],
+      "requirements": [
+        "R11",
+        "R29"
+      ],
       "description": "Skenario RC: rollTo(n, n+1) di dalam jeda.",
       "tests": [
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_Spec_SC04_RollToNextDuringGap_AE3",
         "test/EdgeCases.t.sol:EdgeCasesTest:test_Flow_F1_FullCycle_RealStack"
       ],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Fase 2 (RC di Arbitrum Sepolia) belum dijalankan."
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0xf7e7ac362cb95242e3840f4901fd614948860aebec49e8c8bc6965050fd5b008",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315425695
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "RC-ROLL-N2-LATE",
       "kind": "rc-scenario",
       "lifecycle": true,
-      "requirements": ["R11", "R29"],
+      "requirements": [
+        "R11",
+        "R29"
+      ],
       "description": "Skenario RC: roll telat setelah startsAt(n+1) masuk ke n+2.",
       "tests": [
         "test/CoverVaultCalendar.t.sol:CoverVaultCalendarTest:test_AE4_LateSettle_RollsToNPlus2",
         "test/EdgeCases.t.sol:EdgeCasesTest:test_Flow_F1_FullCycle_RealStack"
       ],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Fase 2 (RC di Arbitrum Sepolia) belum dijalankan."
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0x278e73eb0b7dbdea37ad31bacf19299faf90d5e1a7abfc328ffaff49fc3bd278",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315427374
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "RC-CANCEL",
       "kind": "rc-scenario",
       "lifecycle": true,
-      "requirements": ["R16", "R29"],
+      "requirements": [
+        "R16",
+        "R29"
+      ],
       "description": "Skenario RC: pembatalan dini (NFT kembali, premi hangus).",
-      "tests": ["test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE8_CancelDay3_FreesCapacityAndSlot_PremiumStays"],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Fase 2 (RC di Arbitrum Sepolia) belum dijalankan."
+      "tests": [
+        "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE8_CancelDay3_FreesCapacityAndSlot_PremiumStays"
+      ],
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0x30b622b65509b4f98c112c5497dc17f60e894912668021513d2c5e5097e0aaf6",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315412509
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "RC-COLLECT-FEES",
       "kind": "rc-scenario",
       "lifecycle": true,
-      "requirements": ["R14", "R29"],
+      "requirements": [
+        "R14",
+        "R29"
+      ],
       "description": "Skenario RC: pengambilan fee posisi selama NFT dititipkan.",
-      "tests": ["test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE7_Escrow_OnlyOwnerCollectsToChosenRecipient"],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Fase 2 (RC di Arbitrum Sepolia) belum dijalankan."
+      "tests": [
+        "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE7_Escrow_OnlyOwnerCollectsToChosenRecipient"
+      ],
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0x72d601f7af48cacde76a61cc47f31ec19e6154770225f0f904319f510469009e",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315412138
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "RC-PAYOUT-PARKED",
       "kind": "rc-scenario",
       "lifecycle": true,
-      "requirements": ["R17", "R29"],
+      "requirements": [
+        "R17",
+        "R29"
+      ],
       "description": "Skenario RC: payout ke RejectingReceiver diparkir, lalu claimUnclaimed.",
-      "tests": ["test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE9_RejectingReceiver_PayoutParked_NftDelivered"],
-      "rcTx": [],
-      "status": "pending",
-      "reason": "Fase 2 (RC di Arbitrum Sepolia) belum dijalankan."
+      "tests": [
+        "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE9_RejectingReceiver_PayoutParked_NftDelivered"
+      ],
+      "rcTx": [
+        {
+          "network": 421614,
+          "hash": "0x54bf3a447237267e50660e849ac06829a014f4f3bc19d40b86f4014c27d02320",
+          "expectAddressIn": "markets.0.vault",
+          "block": 315425140
+        },
+        {
+          "network": 421614,
+          "hash": "0x9a12b442626ece9820500c08e586d87737386819153c959382bf5f3b3c757099",
+          "expectAddressIn": "aux.rejectingReceiver_3",
+          "block": 315425498
+        }
+      ],
+      "status": "green"
     },
     {
       "id": "RC-NFT-PARKED",
       "kind": "rc-scenario",
-      "requirements": ["R17"],
+      "requirements": [
+        "R17"
+      ],
       "description": "Skenario: pengembalian NFT gagal → NFT diparkir dan diambil lewat claimPosition.",
-      "tests": ["test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE9_Defense_TransferFails_NftParked_ClaimPosition"],
+      "tests": [
+        "test/CoverVaultPolicy.t.sol:CoverVaultPolicyTest:test_AE9_Defense_TransferFails_NftParked_ClaimPosition"
+      ],
       "rcTx": [],
       "status": "n-a",
       "reason": "tidak dapat dipicu pada NFPM asli; dibuktikan lewat tes unit"
@@ -777,7 +1064,11 @@
       "id": "RC-KEEPER-CYCLE",
       "kind": "rc-scenario",
       "lifecycle": true,
-      "requirements": ["R3", "R20", "R29"],
+      "requirements": [
+        "R3",
+        "R20",
+        "R29"
+      ],
       "description": "Skenario RC: keeper tanpa campur tangan menjalankan satu siklus penuh (runner --keeper-only: poke, finalize, settleBatch).",
       "tests": [
         "test/CoverVaultKeeper.t.sol:CoverVaultKeeperTest:test_Poke_AfterInterval_PaysAndBudgetDecreases",
@@ -791,45 +1082,70 @@
     {
       "id": "RP-FINALIZE-GAS-ALL-TENORS",
       "kind": "release-profile",
-      "requirements": ["R24", "R28"],
+      "requirements": [
+        "R24",
+        "R28"
+      ],
       "description": "Profil rilis: gas finalize dengan pindai penuh sampel 30 menit untuk 7/14/28 hari di satu accumulator bersama.",
-      "tests": ["test/ReleaseProfile.t.sol:ReleaseProfileTest:test_Profile_FinalizeGas_AllTenors_FullScan"],
+      "tests": [
+        "test/ReleaseProfile.t.sol:ReleaseProfileTest:test_Profile_FinalizeGas_AllTenors_FullScan"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "RP-FINALIZE-GAS-28D-DEGRADED",
       "kind": "release-profile",
-      "requirements": ["R12", "R28"],
+      "requirements": [
+        "R12",
+        "R28"
+      ],
       "description": "Profil rilis: gas finalize kasus terburuk pindai degraded (celah di interval terakhir cohort 28 hari).",
-      "tests": ["test/ReleaseProfile.t.sol:ReleaseProfileTest:test_Profile_FinalizeGas_28d_DegradedAtTheEnd"],
+      "tests": [
+        "test/ReleaseProfile.t.sol:ReleaseProfileTest:test_Profile_FinalizeGas_28d_DegradedAtTheEnd"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "RP-SETTLE-CAP100",
       "kind": "release-profile",
-      "requirements": ["R24", "R28"],
+      "requirements": [
+        "R24",
+        "R28"
+      ],
       "description": "Profil rilis: satu settleBatch menuntaskan cohort penuh di policyCap 100 (termasuk pengembalian NFT) dalam batas gas blok Arbitrum dan lebar jeda.",
-      "tests": ["test/ReleaseProfile.t.sol:ReleaseProfileTest:test_Profile_SettleFullCohort_Cap100"],
+      "tests": [
+        "test/ReleaseProfile.t.sol:ReleaseProfileTest:test_Profile_SettleFullCohort_Cap100"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "RP-SETTLE-CAP200",
       "kind": "release-profile",
-      "requirements": ["R24", "R28"],
+      "requirements": [
+        "R24",
+        "R28"
+      ],
       "description": "Profil rilis: headroom pada dua kali policyCap yang direkomendasikan (200).",
-      "tests": ["test/ReleaseProfile.t.sol:ReleaseProfileTest:test_Profile_SettleFullCohort_Cap200"],
+      "tests": [
+        "test/ReleaseProfile.t.sol:ReleaseProfileTest:test_Profile_SettleFullCohort_Cap200"
+      ],
       "rcTx": [],
       "status": "green"
     },
     {
       "id": "RP-ROLL-GAP",
       "kind": "release-profile",
-      "requirements": ["R11", "R28"],
+      "requirements": [
+        "R11",
+        "R28"
+      ],
       "description": "Profil rilis: cohort 7 hari dengan polis hidup di-settle awal di jeda 1 hari dan di-roll ke n+1 pada skala rilis.",
-      "tests": ["test/ReleaseProfile.t.sol:ReleaseProfileTest:test_Profile_RollDuringGap_ReleaseScale"],
+      "tests": [
+        "test/ReleaseProfile.t.sol:ReleaseProfileTest:test_Profile_RollDuringGap_ReleaseScale"
+      ],
       "rcTx": [],
       "status": "green"
     }
